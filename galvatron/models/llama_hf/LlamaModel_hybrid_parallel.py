@@ -1,9 +1,9 @@
-from transformers import LlamaForCausalLM
-from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_parallel_configs_api
-from galvatron.models.llama_hf.LlamaModel_sequential import LlamaModelInfo, construct_sequential_model, LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_
-from galvatron.models.llama_hf.LlamaModel_tensor_parallel import construct_tensor_parallel_model, LlamaLayer_tp
-from galvatron.models.llama_hf.LlamaModel_checkpoint import load_llama_module
-from galvatron.core.initialize import init_empty_weights
+# from transformers import LlamaForCausalLM
+# from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_parallel_configs_api
+# from galvatron.models.llama_hf.LlamaModel_sequential import LlamaModelInfo, construct_sequential_model, LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_
+# from galvatron.models.llama_hf.LlamaModel_tensor_parallel import construct_tensor_parallel_model, LlamaLayer_tp
+# from galvatron.models.llama_hf.LlamaModel_checkpoint import load_llama_module
+# from galvatron.core.initialize import init_empty_weights
 from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config
 # from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
 

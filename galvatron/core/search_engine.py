@@ -12,9 +12,14 @@ from galvatron.utils import (
     write_json_config,
     remap_config
 )
-from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
+from galvatron.core import DpOnModel
 from scipy.optimize import curve_fit
 from galvatron.core.cost_model import pipeline_costmodel
+
+if os.getenv('decouple') == '1':
+    from galvatron.core.cost_model import MemoryCost as MemoryCostModel, TimeCost as TimeCostModel
+else:
+    from galvatron.core.cost_model import MemoryCostModel, TimeCostModel
 
 class GalvatronSearchEngine():
     def __init__(self, args):
@@ -280,13 +285,37 @@ class GalvatronSearchEngine():
     def set_time_cost_models(self):
         self.timecost_model_args_list = []
         for i in range(self.num_layertype):
-            self.timecost_model_args_list.append({ 
+            if os.getenv('decouple') == '0':
+                self.timecost_model_args_list.append({ 
+                        'parameter_size': self.param_sizes[i],
+                        'microbatch': False if self.use_pipeline_costmodel else True,
+                        'optimal_chunk_func': self.optimal_chunk_func,
+                        'sequence_length': self.seqlen_list[i],
+                        'hidden_size': self.hiddensize_list[i],
+                        'vocab_size': self.args.padded_vocab_size,
+                        'forward_computation_time': self.time_profiled_list[i],
+                        'bct_fct_coe': 2,
+                        'extra_overhead': 0,
+                        'comm_coe_dict': self.allreduce_comm_coe,
+                        'dp_overlap_coe': self.overlap_coe,
+                        'bct_overlap_coe': self.overlap_coe,
+                        'p2p_comm_coe_dict': self.p2p_comm_coe,
+                        'layer_num': self.layernum_list[i],
+                        'use_zero2_for_dp': 1 if self.args.default_dp_type == 'zero2' else 0,
+                        'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
+                        'costmodel_coe': self.args.costmodel_coe,
+                        'async_grad_reduce': self.args.async_grad_reduce,
+                        'allreduce_dict': self.sp_allreduce,
+                        'all2all_dict': self.sp_all2all,
+                        'sp_space': self.args.sp_space,
+                        })
+            else:
+                self.timecost_model_args_list.append({ 
                     'parameter_size': self.param_sizes[i],
                     'microbatch': False if self.use_pipeline_costmodel else True,
                     'optimal_chunk_func': self.optimal_chunk_func,
                     'sequence_length': self.seqlen_list[i],
                     'hidden_size': self.hiddensize_list[i],
-                    'vocab_size': self.args.padded_vocab_size,
                     'forward_computation_time': self.time_profiled_list[i],
                     'bct_fct_coe': 2,
                     'extra_overhead': 0,
@@ -307,15 +336,34 @@ class GalvatronSearchEngine():
     def set_memory_cost_models(self):
         self.memcost_model_args_list = []
         for i in range(self.num_layertype):
-            self.memcost_model_args_list.append({  
+            if os.getenv('decouple') == '0':
+                self.memcost_model_args_list.append({  
+                        'parameter_size': self.param_sizes[i],
+                        'tp_activation_per_bsz_dict': self.act_sizes[i],
+                        'other_memory_pp_off': self.other_memory_pp_off,
+                        'other_memory_pp_on': self.other_memory_pp_on,
+                        'microbatch': True,
+                        'optimal_chunk_func': self.optimal_chunk_func,
+                        'model_type': self.model_type,
+                        'checkpoint': 0 if self.args.disable_ckpt else 1,
+                        'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
+                        'use_zero3_for_embed':self.args.embed_sdp,
+                        'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
+                        'pipeline_type': self.args.pipeline_type,
+                        'disable_vtp': self.args.disable_vtp,
+                        'max_tp_deg': self.args.max_tp_deg,
+                        'gpu_num': self.args.gpu_num,
+                        'async_grad_reduce': self.args.async_grad_reduce,
+                        'sequence_parallel': self.args.sequence_parallel,
+                        })
+            else:
+                self.memcost_model_args_list.append({
                     'parameter_size': self.param_sizes[i],
                     'tp_activation_per_bsz_dict': self.act_sizes[i],
                     'other_memory_pp_off': self.other_memory_pp_off,
                     'other_memory_pp_on': self.other_memory_pp_on,
-                    'microbatch': True,
                     'optimal_chunk_func': self.optimal_chunk_func,
                     'model_type': self.model_type,
-                    'checkpoint': 0 if self.args.disable_ckpt else 1,
                     'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
                     'use_zero3_for_embed':self.args.embed_sdp,
                     'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
@@ -325,7 +373,7 @@ class GalvatronSearchEngine():
                     'gpu_num': self.args.gpu_num,
                     'async_grad_reduce': self.args.async_grad_reduce,
                     'sequence_parallel': self.args.sequence_parallel,
-                    })
+            })
     
     # =============== For Galvatron Search Engine Parallelism Optimization ===============
     def parallelism_optimization(self):
@@ -611,7 +659,7 @@ class GalvatronSearchEngine():
         for i in range(self.num_layertype):
             memcost_model_args, timecost_model_args, layer_num = self.memcost_model_args_list[i], self.timecost_model_args_list[i], self.layernum_list[i]
             for strategy in self.strategies:
-                re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, **memcost_model_args).get_memory_cost()
+                re = MemoryCostModel(strategy=strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
                 print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other'][min_tp]])
                 memory[i].append(re['enc_total'])
@@ -877,9 +925,9 @@ def pp_division_memory_balanced(memcost_model_args, layer_num, pp_deg, bsz, mbsz
     for i in range(layer_type_num):
         # memcosts = [MemoryCostModel(strategy, global_batch_size=bsz, **memcost_model_args[i]).get_memory_cost()['enc_total'] for strategy in strategies]
         # layer_min_memcost.append(np.min(memcosts))
-        memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[i]).get_memory_cost()['enc_total']
+        memcost = MemoryCostModel(strategy=[pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[i]).get_memory_cost()['enc_total']
         layer_min_memcost.append(np.min(memcost))
-    other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[0]).get_memory_cost()['other'][1]
+    other_cost = MemoryCostModel(strategy=strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[0]).get_memory_cost()['other'][1]
     print(other_cost)
     # print(layer_min_memcost, other_cost)
     min_memcost_all_layers = []

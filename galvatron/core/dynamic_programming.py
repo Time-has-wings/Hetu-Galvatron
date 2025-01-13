@@ -1,7 +1,12 @@
 import numpy as np
 from tqdm import trange
 from .cost_model import pipeline_costmodel
-from .cost_model import OtherTimeCostModel
+
+import os
+if os.getenv('decouple') == '1':
+    from .cost_model import OtherTimeCost as OtherTimeCostModel
+else:
+    from .cost_model import OtherTimeCostModel
 
 class DPAlg():
     def __init__(self, max_mem=8200, other_mem_cost=None, other_time_cost = None, layer_num=24, strategy_num=4, strategy_set=None, fine_grained_mode=True, use_cpp_core=True) -> None:
@@ -217,9 +222,9 @@ class DpOnModel:
 
         for i in range(len(self.layer_num)):
             if self.model_microbatch_after_dp:
-                intra_layer_cost = [self.timecost_model(strategy, bsz/chunks[i], **self.timecost_model_args[i]).gen_result() for strategy in strategy_set]
+                intra_layer_cost = [self.timecost_model(strategy=strategy, global_batch_size=bsz/chunks[i], **self.timecost_model_args[i]).gen_result() for strategy in strategy_set]
             else:
-                intra_layer_cost = [self.timecost_model(strategy, bsz, **self.timecost_model_args[i]).gen_result() for strategy in strategy_set]
+                intra_layer_cost = [self.timecost_model(strategy=strategy, global_batch_size=bsz, **self.timecost_model_args[i]).gen_result() for strategy in strategy_set]
             intra_layer_cost = np.array(intra_layer_cost, dtype=np.float64).reshape(1, -1).repeat(self.layer_num[i], axis=0)
             intra_layer_cost_list.append(intra_layer_cost)
 
@@ -232,22 +237,26 @@ class DpOnModel:
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):
-                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
+                mem_cost_list = [self.memcost_model(strategy=strategy, global_batch_size=bsz, mbsz = mbsz, min_tp = min_tp, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
                 # TODO: mulitple layer type
                 if i == 0:
                     for k, v in mem_cost_list[0]['other'].items():
                         other_mem_cost[k] = np.ceil(v).astype(int)
-                    other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
-                                                        self.timecost_model_args[0]['sequence_length'],
-                                                        self.timecost_model_args[0]['hidden_size'],
-                                                        self.timecost_model_args[0]['mixed_precision'],
-                                                        self.timecost_model_args[0]['comm_coe_dict'], 
-                                                        self.timecost_model_args[0]['allreduce_dict'], 
-                                                        self.timecost_model_args[0]['sp_space'], 
-                                                        vsp, min_tp, max_tp, 
-                                                        self.memcost_model_args[i]['other_memory_pp_on'],
-                                                        self.memcost_model_args[i]['other_memory_pp_off'],
-                                                        self.other_time_profiled_list[i]).gen_result()
+                    other_time_cost = OtherTimeCostModel(mbsz=mbsz, 
+                                                        pp_deg=pp_deg, 
+                                                        world_size=self.n_gpu, 
+                                                        sequence_length=self.timecost_model_args[0]['sequence_length'],
+                                                        hidden_size=self.timecost_model_args[0]['hidden_size'],
+                                                        mixed_precision=self.timecost_model_args[0]['mixed_precision'],
+                                                        comm_coe_dict=self.timecost_model_args[0]['comm_coe_dict'], 
+                                                        allreduce_dict=self.timecost_model_args[0]['allreduce_dict'], 
+                                                        sp_space=self.timecost_model_args[0]['sp_space'], 
+                                                        vsp=vsp, 
+                                                        min_tp=min_tp, 
+                                                        max_tp=max_tp, 
+                                                        other_memory_pp_on=self.memcost_model_args[i]['other_memory_pp_on'],
+                                                        other_memory_pp_off=self.memcost_model_args[i]['other_memory_pp_off'],
+                                                        other_time_profiled_list=self.other_time_profiled_list[i]).gen_result()
                 v = [cost['enc_total'] for cost in mem_cost_list]
                 v = np.ceil(np.array(v)).astype(np.int32)
                 v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0)
@@ -259,22 +268,26 @@ class DpOnModel:
             for stage_idx in range(pp_deg):
                 v_list = []
                 for i in range(len(self.layer_num)):
-                    mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, stage_idx = stage_idx, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
+                    mem_cost_list = [self.memcost_model(strategy=strategy, global_batch_size=bsz, mbsz = mbsz, min_tp = min_tp, stage_idx = stage_idx, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
                     # TODO: mulitple layer type
                     if stage_idx == 0 and i == 0:
                         for k, v in mem_cost_list[0]['other'].items():
                             other_mem_cost[k] = np.ceil(v).astype(int)
-                        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
-                                                        self.timecost_model_args[0]['sequence_length'],
-                                                        self.timecost_model_args[0]['hidden_size'],
-                                                        self.timecost_model_args[0]['mixed_precision'],
-                                                        self.timecost_model_args[0]['comm_coe_dict'], 
-                                                        self.timecost_model_args[0]['allreduce_dict'], 
-                                                        self.timecost_model_args[0]['sp_space'], 
-                                                        vsp, min_tp, max_tp, 
-                                                        self.memcost_model_args[i]['other_memory_pp_on'],
-                                                        self.memcost_model_args[i]['other_memory_pp_off'],
-                                                        self.other_time_profiled_list[i]).gen_result()
+                        other_time_cost = OtherTimeCostModel(mbsz=mbsz, 
+                                                            pp_deg=pp_deg, 
+                                                            world_size=self.n_gpu, 
+                                                            sequence_length=self.timecost_model_args[0]['sequence_length'],
+                                                            hidden_size=self.timecost_model_args[0]['hidden_size'],
+                                                            mixed_precision= self.timecost_model_args[0]['mixed_precision'],
+                                                            comm_coe_dict=self.timecost_model_args[0]['comm_coe_dict'], 
+                                                            allreduce_dict=self.timecost_model_args[0]['allreduce_dict'], 
+                                                            sp_space=self.timecost_model_args[0]['sp_space'], 
+                                                            vsp=vsp, 
+                                                            min_tp=min_tp, 
+                                                            max_tp=max_tp, 
+                                                            other_memory_pp_on=self.memcost_model_args[i]['other_memory_pp_on'],
+                                                            other_memory_pp_off=self.memcost_model_args[i]['other_memory_pp_off'],
+                                                            other_time_profiled_list=self.other_time_profiled_list[i]).gen_result()
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
                     v = np.ceil(np.array(v)).astype(np.int32)

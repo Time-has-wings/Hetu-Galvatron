@@ -17,5 +17,10 @@ if __name__ == '__main__':
     search_engine.set_model_type('gpt') # Optional
     
     search_engine.initialize_search_engine()
+    
+    if os.getenv('decouple') == '1':
+        print('>>> decouple')
+    else:
+        print('>>> not decouple')
     # search_engine.check_cost_model(bsz=48,chunk=1,min_tp=1)
     search_engine.parallelism_optimization()
