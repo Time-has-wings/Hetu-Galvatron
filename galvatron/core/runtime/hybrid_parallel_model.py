@@ -35,13 +35,15 @@ class GalvatronModel(nn.Module):
         super().__init__()
         from galvatron.core import get_args
 
-        self.args = get_args()
+        self.args = get_args()  # 获取全局参数
         self.model = hp_model
         self.iter = 0
 
     def forward_backward(self, batch, iter=None, profiler=None, loss_func=None, **kwargs):
         args, model = self.args, self.model
         self.iter = iter if iter is not None else self.iter
+        
+        # 设置损失函数
         if loss_func is not None:
             if len(batch) == 1 and isinstance(batch[0], Tensor):
                 batch = [batch, [self.fake_tensor(batch[0])]]

@@ -10,14 +10,16 @@ from galvatron.utils import (
     strategy2config,
     array2str,
     write_json_config,
-    remap_config,
-    num2str
+    remap_config
 )
+from galvatron.core import DpOnModel
 from scipy.optimize import curve_fit
-from .cost_model import MemoryCostModel, TimeCostModel, pipeline_costmodel
-from .dynamic_programming import DpOnModel
-from .cost import ParallelConfigArgs, ModelConfigArgs, TrainConfigArgs, DynamicConfigArgs, HardwareConfigArgs, MemoryCost
+from galvatron.core.cost_model import pipeline_costmodel
 
+if os.getenv('decouple') == '1':
+    from galvatron.core.cost_model import MemoryCost as MemoryCostModel, TimeCost as TimeCostModel
+else:
+    from galvatron.core.cost_model import MemoryCostModel, TimeCostModel
 
 class GalvatronSearchEngine():
     def __init__(self, args):
@@ -66,11 +68,7 @@ class GalvatronSearchEngine():
             memory_config_path = os.path.join(self.path, 'configs')
         else:
             memory_config_path = args.memory_profiling_path
-        # self.mem_path = os.path.join(memory_config_path, memory_config_name)
-        
-        # FIXME: 先手动设置json文件为指定文件
-        self.mem_path = os.path.join(memory_config_path, "test-memory.json")
-        print(f'>>> mem_path is {self.mem_path}')
+        self.mem_path = os.path.join(memory_config_path, memory_config_name)
         return self.mem_path
     
     def time_profiling_path(self):
@@ -84,10 +82,7 @@ class GalvatronSearchEngine():
         else:
             self.time_path = args.time_profiling_path
 
-        # self.time_path = os.path.join(self.time_path, time_config_name)
-        # FIXME: 先手动设置json文件为指定文件
-        self.time_path = os.path.join(self.time_path, "test-computation.json")
-        print(f'>>> time_path is {self.time_path}')
+        self.time_path = os.path.join(self.time_path, time_config_name)
         return self.time_path
     
     def set_microbatch_func(self, microbatch_size, max_chunk):
@@ -132,7 +127,7 @@ class GalvatronSearchEngine():
                 for s,t in self.time_config.items():
                     if s.startswith('layertype_%d_'%i):
                         self.time_profiled_list.append(t)
-                    if s.startswith('layertype_other_'):
+                    if s.startswith('layertype_other_%d_'%i):
                         self.other_time_profiled_list.append(t)
         elif self.args.time_profile_mode == "batch":
             self.time_profiled_list = []
@@ -155,7 +150,7 @@ class GalvatronSearchEngine():
                 x_data = []
                 y_data = []
                 for s,t in self.time_config.items():
-                    if s.startswith('layertype_other_') and '_seq%d'%self.seqlen_list[i] in s:
+                    if s.startswith('layertype_%d_'%i) and '_seq%d'%self.seqlen_list[i] in s:
                         x_data.append(int(s.split('_')[-2][3:]))
                         y_data.append(t * x_data[-1])
                 assert len(x_data) >= 8, "Different bsz in computation profile of layertype_other_%d should not be lower than 8."%i
@@ -187,7 +182,7 @@ class GalvatronSearchEngine():
                 x_data = []
                 y_data = []
                 for s,t in self.time_config.items():
-                    if s.startswith('layertype_other_') and "_bsz1_" in s:
+                    if s.startswith('layertype_other_%d_'%i) and "_bsz1_" in s:
                         x_data.append(int(s.split('seq')[-1]))
                         y_data.append(t)
                 # assert len(x_data) >= 8, "Different bsz in computation profile of layertype_other_%d should not be lower than 8."%i
@@ -200,9 +195,7 @@ class GalvatronSearchEngine():
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
         if self.args.memory_profile_mode == "sequence":
-
-            assert self.args.sequence_parallel, "Sequence parallel is required for sequence memory profiling."
-            assert self.num_layertype == 1, "Only support num(layertype) == 1 for sequence memory profiling."
+            assert self.args.sequence_parallel
             maxseq_list = []
             for i in range(self.num_layertype):
                 layer_mem_config = self.memory_config['layertype_%d_sp'%i]
@@ -230,7 +223,6 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                # seq_info = num2str(self.seqlen_list, 'seq')[3:]
                 self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][self.seqlen_list[0]]
                 self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][self.seqlen_list[-1]]}
             else:
@@ -240,7 +232,6 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                # seq_info = num2str(self.seqlen_list, 'seq')[3:]
                 self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][self.seqlen_list[0]]
                 self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last'][self.seqlen_list[-1]]}
         
@@ -254,9 +245,7 @@ class GalvatronSearchEngine():
         else:
             allreduce_bandwidth_config_path = args.allreduce_bandwidth_config_path
         allreduce_bandwidth_config_name = 'allreduce_bandwidth_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
-        # FIXME: 手动设置allreduce文件路径
-        # args.allreduce_bandwidth_config_path  = os.path.join(allreduce_bandwidth_config_path, allreduce_bandwidth_config_name)
-        args.allreduce_bandwidth_config_path = os.path.join(allreduce_bandwidth_config_path, "test-allreduce_bandwidth_1nodes_8gpus_per_node.json")
+        args.allreduce_bandwidth_config_path  = os.path.join(allreduce_bandwidth_config_path, allreduce_bandwidth_config_name)
         self.allreduce_bandwidth, self.allreduce_comm_coe = read_allreduce_bandwidth_config(args.allreduce_bandwidth_config_path, gpu_num=args.gpu_num)
         
         if args.p2p_bandwidth_config_path is None:
@@ -265,9 +254,7 @@ class GalvatronSearchEngine():
         else:
             p2p_bandwidth_config_path = args.p2p_bandwidth_config_path
         p2p_bandwidth_config_name = 'p2p_bandwidth_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
-        # FIXME: 手动设置p2p文件路径
-        # args.p2p_bandwidth_config_path  = os.path.join(p2p_bandwidth_config_path, p2p_bandwidth_config_name)
-        args.p2p_bandwidth_config_path = os.path.join(p2p_bandwidth_config_path, "test-p2p_bandwidth_1nodes_8gpus_per_node.json")
+        args.p2p_bandwidth_config_path  = os.path.join(p2p_bandwidth_config_path, p2p_bandwidth_config_name)
         self.p2p_bandwidth, self.p2p_comm_coe = read_p2p_bandwidth_config(args.p2p_bandwidth_config_path)
         
         if args.overlap_coe_path is None:
@@ -276,20 +263,15 @@ class GalvatronSearchEngine():
         else:
             overlap_coe_path = args.overlap_coe_path
         overlap_coe_name = 'overlap_coefficient.json'
-        # FIXME: 手动设置overlap文件路径
-        # args.overlap_coe_path = os.path.join(overlap_coe_path, overlap_coe_name)
-        args.overlap_coe_path = os.path.join(overlap_coe_path, "test-overlap_coefficient.json")
+        args.overlap_coe_path = os.path.join(overlap_coe_path, overlap_coe_name)
         self.overlap_coe = read_json_config(args.overlap_coe_path)['overlap_coe']
-        
         if args.sp_time_path is None:
             hardware_configs_dir = '../../profile_hardware/hardware_configs/'
             sp_time_path = os.path.join(self.path, hardware_configs_dir)
         else:
             sp_time_path = args.sp_time_path
         sp_time_config_name = 'sp_time_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
-        # FIXME: 手动设置sp_time文件路径
-        # args.sp_time_path = os.path.join(sp_time_path, sp_time_config_name)
-        args.sp_time_path = os.path.join(sp_time_path, "test-sp_time_1nodes_8gpus_per_node.json")
+        args.sp_time_path = os.path.join(sp_time_path, sp_time_config_name)
         sp_config = read_json_config(args.sp_time_path)
         self.sp_allreduce = remap_config(sp_config, "allreduce")
         self.sp_all2all = remap_config(sp_config, "all2all")
@@ -303,13 +285,37 @@ class GalvatronSearchEngine():
     def set_time_cost_models(self):
         self.timecost_model_args_list = []
         for i in range(self.num_layertype):
-            self.timecost_model_args_list.append({ 
+            if os.getenv('decouple') == '0':
+                self.timecost_model_args_list.append({ 
+                        'parameter_size': self.param_sizes[i],
+                        'microbatch': False if self.use_pipeline_costmodel else True,
+                        'optimal_chunk_func': self.optimal_chunk_func,
+                        'sequence_length': self.seqlen_list[i],
+                        'hidden_size': self.hiddensize_list[i],
+                        'vocab_size': self.args.padded_vocab_size,
+                        'forward_computation_time': self.time_profiled_list[i],
+                        'bct_fct_coe': 2,
+                        'extra_overhead': 0,
+                        'comm_coe_dict': self.allreduce_comm_coe,
+                        'dp_overlap_coe': self.overlap_coe,
+                        'bct_overlap_coe': self.overlap_coe,
+                        'p2p_comm_coe_dict': self.p2p_comm_coe,
+                        'layer_num': self.layernum_list[i],
+                        'use_zero2_for_dp': 1 if self.args.default_dp_type == 'zero2' else 0,
+                        'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
+                        'costmodel_coe': self.args.costmodel_coe,
+                        'async_grad_reduce': self.args.async_grad_reduce,
+                        'allreduce_dict': self.sp_allreduce,
+                        'all2all_dict': self.sp_all2all,
+                        'sp_space': self.args.sp_space,
+                        })
+            else:
+                self.timecost_model_args_list.append({ 
                     'parameter_size': self.param_sizes[i],
                     'microbatch': False if self.use_pipeline_costmodel else True,
                     'optimal_chunk_func': self.optimal_chunk_func,
                     'sequence_length': self.seqlen_list[i],
                     'hidden_size': self.hiddensize_list[i],
-                    'vocab_size': self.args.padded_vocab_size,
                     'forward_computation_time': self.time_profiled_list[i],
                     'bct_fct_coe': 2,
                     'extra_overhead': 0,
@@ -328,44 +334,46 @@ class GalvatronSearchEngine():
                     })
     
     def set_memory_cost_models(self):
-        # self.memcost_model_args_list = []
-        self.memory_config_args = []
+        self.memcost_model_args_list = []
         for i in range(self.num_layertype):
-            pca = ParallelConfigArgs(sequence_parallel=self.args.sequence_parallel,
-                                    pipeline_type=self.args.pipeline_type, 
-                                    use_zero2_for_dp=1 if self.args.default_dp_type == 'zero2' else 0, 
-                                    use_zero3_for_embed=self.args.embed_sdp,
-                                    max_tp_deg=self.args.max_tp_deg,
-                                    disable_vtp=self.args.disable_vtp)  # 还需提供strategy
-            mca = ModelConfigArgs(parameter_size=self.param_sizes[i],
-                                  model_type=self.model_type)
-            tca = TrainConfigArgs(mixed_precision=False if self.args.mixed_precision == 'fp32' else True,
-                                async_grad_reduce=self.args.async_grad_reduce)
-            dca = DynamicConfigArgs(optimal_chunk_func=self.optimal_chunk_func)
-            hca = HardwareConfigArgs(tp_activation_per_bsz_dict=self.act_sizes[i],
-                                     other_memory_pp_off=self.other_memory_pp_off,
-                                     other_memory_pp_on=self.other_memory_pp_on)
-            
-            self.memory_config_args.append({'pca': pca, 'mca': mca, 'tca': tca, 'dca': dca, 'hca': hca})
-            # self.memcost_model_args_list.append({  
-            #         'parameter_size': self.param_sizes[i],
-            #         'tp_activation_per_bsz_dict': self.act_sizes[i],
-            #         'other_memory_pp_off': self.other_memory_pp_off,
-            #         'other_memory_pp_on': self.other_memory_pp_on,
-            #         'microbatch': True,
-            #         'optimal_chunk_func': self.optimal_chunk_func,
-            #         'model_type': self.model_type,
-            #         'checkpoint': 0 if self.args.disable_ckpt else 1,
-            #         'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
-            #         'use_zero3_for_embed':self.args.embed_sdp,
-            #         'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
-            #         'pipeline_type': self.args.pipeline_type,
-            #         'disable_vtp': self.args.disable_vtp,
-            #         'max_tp_deg': self.args.max_tp_deg,
-            #         'gpu_num': self.args.gpu_num,
-            #         'async_grad_reduce': self.args.async_grad_reduce,
-            #         'sequence_parallel': self.args.sequence_parallel,
-            #         })
+            if os.getenv('decouple') == '0':
+                self.memcost_model_args_list.append({  
+                        'parameter_size': self.param_sizes[i],
+                        'tp_activation_per_bsz_dict': self.act_sizes[i],
+                        'other_memory_pp_off': self.other_memory_pp_off,
+                        'other_memory_pp_on': self.other_memory_pp_on,
+                        'microbatch': True,
+                        'optimal_chunk_func': self.optimal_chunk_func,
+                        'model_type': self.model_type,
+                        'checkpoint': 0 if self.args.disable_ckpt else 1,
+                        'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
+                        'use_zero3_for_embed':self.args.embed_sdp,
+                        'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
+                        'pipeline_type': self.args.pipeline_type,
+                        'disable_vtp': self.args.disable_vtp,
+                        'max_tp_deg': self.args.max_tp_deg,
+                        'gpu_num': self.args.gpu_num,
+                        'async_grad_reduce': self.args.async_grad_reduce,
+                        'sequence_parallel': self.args.sequence_parallel,
+                        })
+            else:
+                self.memcost_model_args_list.append({
+                    'parameter_size': self.param_sizes[i],
+                    'tp_activation_per_bsz_dict': self.act_sizes[i],
+                    'other_memory_pp_off': self.other_memory_pp_off,
+                    'other_memory_pp_on': self.other_memory_pp_on,
+                    'optimal_chunk_func': self.optimal_chunk_func,
+                    'model_type': self.model_type,
+                    'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
+                    'use_zero3_for_embed':self.args.embed_sdp,
+                    'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
+                    'pipeline_type': self.args.pipeline_type,
+                    'disable_vtp': self.args.disable_vtp,
+                    'max_tp_deg': self.args.max_tp_deg,
+                    'gpu_num': self.args.gpu_num,
+                    'async_grad_reduce': self.args.async_grad_reduce,
+                    'sequence_parallel': self.args.sequence_parallel,
+            })
     
     # =============== For Galvatron Search Engine Parallelism Optimization ===============
     def parallelism_optimization(self):
@@ -539,7 +547,7 @@ class GalvatronSearchEngine():
             pp_stage_dict = get_pp_stage_for_bsz(strategies, self.memcost_model_args_list, self.layernum_list, bsz)
             dp_on_model = DpOnModel(strategies, MemoryCostModel, TimeCostModel, 
                                     self.memcost_model_args_list, self.timecost_model_args_list,
-                                    max_mem=self.memory_constraint, layer_num=self.layernum_list, sequence_len = self.seqlen_list, 
+                                    max_mem=self.memory_constraint, layer_num=self.layernum_list, 
                                     multi_layer_type = True, pp_stage_dict = pp_stage_dict,
                                     comm_coe_dict=self.allreduce_comm_coe, gpu_num=self.args.gpu_num,
                                     config = self.args)
@@ -561,7 +569,6 @@ class GalvatronSearchEngine():
                                 other_time_profiled_list=self.other_time_profiled_list,
                                 max_mem=self.memory_constraint,
                                 layer_num=self.layernum_list,
-                                sequence_len = self.seqlen_list,
                                 multi_layer_type = True,
                                 pp_stage_dict = pp_stage_dict,
                                 search_history=self.search_history,
@@ -650,14 +657,9 @@ class GalvatronSearchEngine():
         
         other = []
         for i in range(self.num_layertype):
-            memcost_model_args, timecost_model_args, layer_num = self.memory_config_args[i], self.timecost_model_args_list[i], self.layernum_list[i]
+            memcost_model_args, timecost_model_args, layer_num = self.memcost_model_args_list[i], self.timecost_model_args_list[i], self.layernum_list[i]
             for strategy in self.strategies:
-                memcost_model_args['pca'].strategy = strategy
-                memcost_model_args['tca'].global_batch_size = bsz
-                memcost_model_args['dca'].mbsz = mbsz_dict[strategy[0]]
-                memcost_model_args['dca'].min_tp = min_tp
-                re = MemoryCost(memcost_model_args['pca'], memcost_model_args['tca'], memcost_model_args['dca'], memcost_model_args['mca'], memcost_model_args['hca']).get_memory_cost()
-                # re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, **memcost_model_args).get_memory_cost()
+                re = MemoryCostModel(strategy=strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
                 print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other'][min_tp]])
                 memory[i].append(re['enc_total'])
@@ -675,8 +677,6 @@ class GalvatronSearchEngine():
                 mem_cost_stages = get_cost_all_stages(layer_memcosts, pp_division)
                 print(form_strategy(strategy), mem_cost_stages[0]+other[i][min_tp][0], mem_cost_stages[-1]+other[i][min_tp][-1])
         
-        print("only test memory")
-        return
         print()
         if self.num_layertype == 1:
             for strategy in self.strategies:
@@ -904,7 +904,7 @@ class GalvatronSearchEngine():
         print(self.timecost_model_args_list)
         print('================================================================================')
         print('Memory Cost Model Args:')
-        # print(self.memcost_model_args_list)
+        print(self.memcost_model_args_list)
         print('================================================================================')
 
 
@@ -925,18 +925,17 @@ def pp_division_memory_balanced(memcost_model_args, layer_num, pp_deg, bsz, mbsz
     for i in range(layer_type_num):
         # memcosts = [MemoryCostModel(strategy, global_batch_size=bsz, **memcost_model_args[i]).get_memory_cost()['enc_total'] for strategy in strategies]
         # layer_min_memcost.append(np.min(memcosts))
-        memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[i]).get_memory_cost()['enc_total']
+        memcost = MemoryCostModel(strategy=[pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[i]).get_memory_cost()['enc_total']
         layer_min_memcost.append(np.min(memcost))
-    other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[0]).get_memory_cost()['other'][1]
-    # print(other_cost)
+    other_cost = MemoryCostModel(strategy=strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[0]).get_memory_cost()['other'][1]
+    print(other_cost)
     # print(layer_min_memcost, other_cost)
     min_memcost_all_layers = []
     for i in range(layer_type_num):
         min_memcost_all_layers += [layer_min_memcost[i]]*layer_num[i]
-    # print(min_memcost_all_layers)
+    print(min_memcost_all_layers)
     avg_mem_cost = (np.sum(min_memcost_all_layers)+np.sum(other_cost))/pp_deg
-    # print(min_memcost_all_layers, other_cost)
-    # print('Avg memcost:', avg_mem_cost)
+    #print('Avg memcost:', avg_mem_cost)
 
     pp_divide = [0] * pp_deg
     mem_cost_per_stage = other_cost.copy()
@@ -945,6 +944,7 @@ def pp_division_memory_balanced(memcost_model_args, layer_num, pp_deg, bsz, mbsz
         while True:
             if idx >= len(min_memcost_all_layers):
                 break
+            print(avg_mem_cost, mem_cost_per_stage[i], pp_divide[i])
             if i < pp_deg - 1 and avg_mem_cost - mem_cost_per_stage[i] < 0.5 * min_memcost_all_layers[idx]:
                 break
             else:

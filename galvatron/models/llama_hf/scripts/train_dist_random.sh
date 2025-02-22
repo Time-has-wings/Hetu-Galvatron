@@ -1,29 +1,29 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
-export MASTER_ADDR=$MASTER_ADDR
-export MASTER_PORT=$MASTER_PORT
-export NODE_RANK=$RANK
+# export MASTER_ADDR=$MASTER_ADDR
+# export MASTER_PORT=$MASTER_PORT
+# export NODE_RANK=$RANK
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"
 LAUNCHER="${LAUNCHER} --nproc_per_node ${NUM_GPUS_PER_NODE}"
-LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
-LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
-LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
+# LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
+# LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
+# LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
 TRAINER="train_dist_random.py"
 
 MODEL_ARGS="
     --model_size llama-7b \
-    --set_model_config_manually 0 \
+    --set_model_config_manually 1 \
     --set_layernum_manually 0 \
     --set_seqlen_manually 1 \
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_hidden_layers 8 \
     --num_attention_heads 32 \
-    --seq_length 2048"
+    --seq_length 1024"
 
 TRAIN_ARGS="
     --global_train_batch_size 16 \
