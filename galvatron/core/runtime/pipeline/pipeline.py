@@ -1598,6 +1598,9 @@ class PipeSequential(nn.Sequential):
     """
     Pipe variant of ``nn.Sequential`` which supports multiple inputs.
     """
+    """
+    PipeSequential   的主要功能是支持多个输入，而标准的   nn.Sequential   只能接受一个输入
+    """
 
     def forward(self, *inputs, **kwargs):
         for module in self:
@@ -1607,3 +1610,29 @@ class PipeSequential(nn.Sequential):
                 # Don't expand single variables (ex: lists/Tensor)
                 inputs = module(inputs, **kwargs)
         return inputs
+
+"""
+import torch
+import torch.nn as nn
+
+# 定义一个简单的多输入模块
+class MultiInputModule(nn.Module):
+    def forward(self, x, y):
+        return x + y
+
+# 创建 PipeSequential 模型
+model = PipeSequential(
+    MultiInputModule(),  # 接收两个输入
+    nn.ReLU()            # 接收单个输出
+)
+
+# 创建输入
+input1 = torch.tensor([1.0])
+input2 = torch.tensor([2.0])
+
+# 调用模型
+output = model(input1, input2)
+print(output)  # 输出：tensor([3.])
+        
+"""
+    

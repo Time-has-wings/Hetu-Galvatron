@@ -19,7 +19,7 @@ from torch.utils.data import Dataset
 from galvatron.core.runtime.hybrid_parallel_config import get_chunks
 from galvatron.core.runtime.pipeline.utils import chunk_batch
 
-
+# 生成从左到右模型的掩码和位置 ID
 def random_get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
     micro_batch_size, seq_length = data.size()
@@ -35,11 +35,12 @@ def random_get_ltor_masks_and_position_ids(data):
 
     return attention_mask  # , position_ids
 
-
+# 数据整理函数
 def random_collate_fn(batch):
-    tokens_ = torch.stack(batch, dim=0)
-    labels = tokens_[:, 1:].contiguous()
-    tokens = tokens_[:, :-1].contiguous()
+    """将批次数据整理为模型输入格式"""
+    tokens_ = torch.stack(batch, dim=0) # 将批次数据堆叠为张量
+    labels = tokens_[:, 1:].contiguous() # 标签为输入的偏移一位，用于预测下一个 token
+    tokens = tokens_[:, :-1].contiguous() # 输入 tokens，去掉最后一个位置
     args = get_args()
     if not args.use_flash_attn:
         attention_mask = random_get_ltor_masks_and_position_ids(tokens)

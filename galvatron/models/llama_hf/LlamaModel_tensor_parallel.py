@@ -11,7 +11,7 @@ from torch import nn
 from galvatron.core import get_args
 from galvatron.core.runtime.tensor_parallel import AttnMaskType, AttnType, ParallelAttention, ParallelMLP
 
-
+# LLaMA 的张量并行注意力模块
 class LlamaAttention_tp(nn.Module):
     def __init__(self, config, layer_number, tp_group=None, sp_group=None):
         super().__init__()
@@ -61,7 +61,7 @@ class LlamaAttention_tp(nn.Module):
         hidden_states = hidden_states + input_tensor
         return hidden_states
 
-
+# LLaMA 的张量并行 MLP 模块
 class LlamaMLP_tp(nn.Module):
     def __init__(self, config, tp_group=None):
         super().__init__()
@@ -77,7 +77,8 @@ class LlamaMLP_tp(nn.Module):
         hidden_states = hidden_states + input_tensor
         return hidden_states
 
-
+# LLaMA 的张量并行层
+# 就是将上述俩模块串联起来
 class LlamaLayer_tp(nn.Module):
     def __init__(self, config, layer_number, tp_group=None, sp_group=None):
         super().__init__()
@@ -98,7 +99,7 @@ class LlamaLayer_tp(nn.Module):
         # outputs = (layer_output
         return layer_output
 
-
+# 构建张量并行模型
 def construct_tensor_parallel_model(model, config, tp_groups_enc, sp_groups_enc):
     layers_tp = nn.ModuleList(
         [

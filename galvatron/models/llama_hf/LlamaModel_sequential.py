@@ -13,11 +13,12 @@ from galvatron.core.runtime import ModelInfo, mixed_precision_dtype
 from galvatron.core.runtime.pipeline import PipeSequential
 from galvatron.core.runtime.tensor_parallel import colummn_row_reset_parameters
 
-
+# 生成从左到右模型的掩码和位置ID
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
     micro_batch_size, seq_length = data.size()
     att_mask_batch = 1
+    # 创建一个下三角矩阵，表示从左到右的因果关系，然后调整形状为 [1, 1, seq_length, seq_length]
     attention_mask = torch.tril(torch.ones((att_mask_batch, seq_length, seq_length), device=data.device)).view(
         att_mask_batch, 1, seq_length, seq_length
     )
@@ -30,6 +31,8 @@ def get_ltor_masks_and_position_ids(data):
     return attention_mask  # , position_ids
 
 
+# LLaMA 模型的嵌入层
+# 其实就相当于wrap，用于pipeline的封装
 class LlamaEmbeddings_(nn.Module):
     def __init__(self, model):
         super().__init__()
@@ -67,7 +70,7 @@ class LlamaEmbeddings_(nn.Module):
 
         return hidden_states
 
-
+# LLaMA 模型的单层
 class LlamaLayers_(nn.Module):
     def __init__(self, model, layer_idx):
         super().__init__()
@@ -79,7 +82,7 @@ class LlamaLayers_(nn.Module):
         hidden_states = self.layer(hidden_states, attention_mask=attention_mask)  # , position_ids = position_ids)
         return hidden_states
 
-
+# LLaMA 模型的前置归一化层
 class LlamaPreNorm_(nn.Module):
     def __init__(self, model, config):
         super().__init__()
@@ -89,7 +92,7 @@ class LlamaPreNorm_(nn.Module):
         hidden_states = self.norm(hidden_states)
         return hidden_states
 
-
+# LLaMA 模型的损失计算层
 class LlamaLoss_(nn.Module):
     def __init__(self, weight, sequence_parallel, tp_group):
         super().__init__()
@@ -113,7 +116,7 @@ class LlamaLoss_(nn.Module):
         )
         return logits_parallel
 
-
+# LLaMA 模型的分类层
 class LlamaCls_(nn.Module):
     def __init__(self, model, parallel_loss=True, half_entropy=True):
         super().__init__()
@@ -181,7 +184,8 @@ class LlamaCls_(nn.Module):
         loss = loss.transpose(0, 1).contiguous()
         return loss
 
-
+# 构建 LLaMA 序列模型 
+# 意思就是将一个原始已经构建好的模型拆分为多个小块
 def construct_sequential_model(model, config):
     model_ = PipeSequential()
     model_.add_module("embeddings", LlamaEmbeddings_(model))
@@ -197,15 +201,16 @@ def construct_sequential_model(model, config):
 class LlamaModelInfo(ModelInfo):
     def __init__(self, config, args):
         super(LlamaModelInfo, self).__init__()
-        layernum_list = [config.num_hidden_layers]
-        seq_len, hidden_size = config.max_position_embeddings, config.hidden_size
-        mixed_precision = mixed_precision_dtype(args.mixed_precision)
+        layernum_list = [config.num_hidden_layers] # 层数列表
+        seq_len, hidden_size = config.max_position_embeddings, config.hidden_size # 序列长度和隐藏大小
+        mixed_precision = mixed_precision_dtype(args.mixed_precision) # 混合精度数据类型
         if args.shape_order == "SBH":
-            layer_shapes_list = [[[seq_len, -1, hidden_size]]]
+            layer_shapes_list = [[[seq_len, -1, hidden_size]]] # 形状为 [序列, 批次, 隐藏]
         else:
-            layer_shapes_list = [[[-1, seq_len, hidden_size]]]
-        layer_dtypes_list = [[mixed_precision]]
+            layer_shapes_list = [[[-1, seq_len, hidden_size]]] # 形状为 [批次, 序列, 隐藏]
+        layer_dtypes_list = [[mixed_precision]] # 数据类型列表
         module_types = ["embed"] + ["gpt_dec"] * config.num_hidden_layers + ["norm", "cls"]
+        
         self.set_layernums(layernum_list)
         self.set_shapes(layer_shapes_list)
         self.set_dtypes(layer_dtypes_list)

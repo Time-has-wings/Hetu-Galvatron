@@ -19,17 +19,17 @@ from galvatron.models.llama_hf.meta_configs import config_from_meta, model_layer
 
 # from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
 
-
+"""获取 LLaMA 模型的混合并行配置"""
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(model_config, training_args, LlamaModelInfo)
     return hybrid_parallel_configs
 
-
+# 构建混合并行模型
 def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_parallel_configs):
-    wrap_block_name = [LlamaLayer_tp]
-    wrap_checkpoint_block_name = [LlamaLayer_tp]
-    wrap_other_block_name = [LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_]
-    all_block_name = [LlamaEmbeddings_, LlamaLayer_tp, LlamaPreNorm_, LlamaCls_]
+    wrap_block_name = [LlamaLayer_tp] # 张量并行层需要封装
+    wrap_checkpoint_block_name = [LlamaLayer_tp] # 需要检查点的块
+    wrap_other_block_name = [LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_] # 其他需要封装的块
+    all_block_name = [LlamaEmbeddings_, LlamaLayer_tp, LlamaPreNorm_, LlamaCls_] # 所有块名称
     hp_model = construct_hybrid_parallel_model_api(
         model,
         model_config,
