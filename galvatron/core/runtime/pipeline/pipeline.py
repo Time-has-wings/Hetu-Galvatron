@@ -34,8 +34,9 @@ from .utils import *
 
 Shape = Union[List[int], torch.Size]
 
-
+# 前向传播函数
 def forward_step_function(loss_func, **kwargs):
+    """创建前向步骤函数，结合损失函数和额外参数"""
     def forward_step(inputs, model):
         if isinstance(inputs, (Tuple, List)):
             outputs = model(*inputs, **kwargs)
@@ -47,35 +48,39 @@ def forward_step_function(loss_func, **kwargs):
 
 
 class PipelineParallel(nn.Module):
+    """实现流水线并行，支持多阶段模型并行计算"""
     def __init__(
         self,
-        model,
+        model, # 模型列表
         model_ranks,
-        layer_output_tensor_shapes,
+        layer_output_tensor_shapes,  # 每层输出张量的形状
         layer_output_tensor_dtypes=None,
-        layer_dp_sizes=None,
-        layer_tp_sizes=None,
-        layer_sp_sizes=None,
-        chunks=1,
+        layer_dp_sizes=None, # 每层数据并行大小
+        layer_tp_sizes=None, # 每层张量并行大小
+        layer_sp_sizes=None, # 每层序列 并行大小
+        chunks=1, # 微批次数量
         process_group=None,
         embedding_group=None,
         nproc_per_node=None,
         require_loss=True,
         info=False,
         # async_grad_reduce=True,
-        tied_wte_attr_names=None,
+        tied_wte_attr_names=None, # 共享词嵌入属性名
     ):
         super().__init__()
-        self.total_model_len = len(model)
+        self.total_model_len = len(model) # 模型总层数
         assert len(model) == len(model_ranks)
         assert len(model) == len(layer_output_tensor_shapes)
+        
+        # 如果未指定数据类型，使用默认类型
         layer_output_tensor_dtypes = (
             self.get_default_tensor_dtype(layer_output_tensor_shapes)
             if layer_output_tensor_dtypes is None
             else layer_output_tensor_dtypes
         )
-        self.check_tensor_dtype(layer_output_tensor_shapes, layer_output_tensor_dtypes)
+        self.check_tensor_dtype(layer_output_tensor_shapes, layer_output_tensor_dtypes) # 检查形状和类型一致性
 
+        # 初始化并行大小列表
         if layer_dp_sizes is None:
             layer_dp_sizes = [1] * len(model)
         if layer_tp_sizes is None:
@@ -83,8 +88,10 @@ class PipelineParallel(nn.Module):
         if layer_sp_sizes is None:
             layer_sp_sizes = [1] * len(model)
         assert len(model) == len(layer_dp_sizes)
+        
+        # 获取分布式环境信息 
         self.world_size = torch.distributed.get_world_size()
-        self.global_rank = torch.distributed.get_rank()
+        self.global_rank = torch.distributed.get_rank()  # 该函数获得的是本设备的全局rank
         self.device_count = (
             nproc_per_node
             if nproc_per_node is not None and nproc_per_node <= torch.cuda.device_count()
@@ -92,6 +99,7 @@ class PipelineParallel(nn.Module):
         )
         self.local_rank = self.global_rank % self.device_count
 
+        # 设置流水线全局rank
         self.pp_global_ranks = (
             [i for i in range(self.world_size)] if process_group is None else sorted(list(set(list(process_group))))
         )
@@ -105,11 +113,16 @@ class PipelineParallel(nn.Module):
             and np.min(model_ranks) == 0
         )
 
+        # 计算当前阶段的起始和结束索引
         self.stage_start_idx, cnt = model_ranks.index(self.group_rank), model_ranks.count(self.group_rank)
         self.stage_end_idx = self.stage_start_idx + cnt
-        self.model_cur_stage = model[self.stage_start_idx : self.stage_end_idx]  # .cuda(self.local_rank)
+        self.model_cur_stage = model[self.stage_start_idx : self.stage_end_idx]  # .cuda(self.local_rank) # 获取当前阶段的模型
+        
+        # 设置微批次
         self.chunks = int(chunks)
         assert self.chunks >= 1
+        
+        # 设置模板张量形状和数据类型
         self.template_stage_input_tensor_shape = (
             [None] if self.is_pipeline_first_stage() else layer_output_tensor_shapes[self.stage_start_idx - 1]
         )
@@ -122,6 +135,8 @@ class PipelineParallel(nn.Module):
         self.stage_output_tensor_dtype = (
             [None] if self.is_pipeline_last_stage() else layer_output_tensor_dtypes[self.stage_end_idx - 1]
         )
+        
+        # 设置并行大小 # [important] 按照layer级别的细粒度划分 不同阶段的dp tp sp等等可以不同
         self.dp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_dp_sizes[self.stage_start_idx - 1]
         self.dp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_dp_sizes[self.stage_end_idx - 1]
 
@@ -142,8 +157,8 @@ class PipelineParallel(nn.Module):
 
         args = get_args()
         self.sequence_parallel = args.sequence_parallel
-        self.shape_order = args.shape_order
-        self.async_grad_reduce = args.async_grad_reduce
+        self.shape_order = args.shape_order # 张量形状顺序
+        self.async_grad_reduce = args.async_grad_reduce # 是否异步梯度归约
         # if not self.async_grad_reduce and self.group_size > 1:
         #     assert Fasle, "No async grad reduce only support pp = 1"
         # assert async_grad_reduce # Remove support for async_grad_reduce=False, which is the old version for gradient synchronization
@@ -151,15 +166,17 @@ class PipelineParallel(nn.Module):
         self.embedding_group = embedding_group
         self.tied_wte_attr_names = tied_wte_attr_names
         self.finalize_wte_grads = (
-            tied_wte_attr_names is not None
+            tied_wte_attr_names is not None # 是否需要同步词嵌入梯度
         )  #  and self.total_model_len > len(self.model_cur_stage)
 
+    """检查张量形状和数据类型的一致性"""
     def check_tensor_dtype(self, layer_output_tensor_shapes, layer_output_tensor_dtypes):
         assert len(layer_output_tensor_shapes) == len(layer_output_tensor_dtypes)
         for i in range(len(layer_output_tensor_shapes)):
             if layer_output_tensor_shapes[i] is not None:
                 assert len(layer_output_tensor_shapes[i]) == len(layer_output_tensor_dtypes[i])
-
+    
+    """获取默认张量数据类型"""
     def get_default_tensor_dtype(self, layer_output_tensor_shapes):
         layer_output_tensor_dtypes = []
         for tensor_shape in layer_output_tensor_shapes:
@@ -183,14 +200,14 @@ class PipelineParallel(nn.Module):
     ):
         assert self.total_model_len == len(dp_types)
         assert self.total_model_len == len(dp_groups)
-        assert self.total_model_len == len(module_types)
-        dp_types_cur_stage = dp_types[self.stage_start_idx : self.stage_end_idx]
-        module_types_cur_stage = module_types[self.stage_start_idx : self.stage_end_idx]
-        dp_groups_cur_stage = dp_groups[self.stage_start_idx : self.stage_end_idx]
-        pp_devices_cur_stage = [self.local_rank] * (self.stage_end_idx - self.stage_start_idx)
-        tp_groups_cur_stage = tp_groups[self.stage_start_idx : self.stage_end_idx]
-        default_process_group = dp_groups[0]
-        self.model_cur_stage = wrap_modules_data_parallel(
+        assert self.total_model_len == len(module_types) 
+        dp_types_cur_stage = dp_types[self.stage_start_idx : self.stage_end_idx] # 当前阶段的数据并行类型
+        module_types_cur_stage = module_types[self.stage_start_idx : self.stage_end_idx] # 当前阶段的模块类型
+        dp_groups_cur_stage = dp_groups[self.stage_start_idx : self.stage_end_idx] # 当前阶段的数据并行组
+        pp_devices_cur_stage = [self.local_rank] * (self.stage_end_idx - self.stage_start_idx) # 当前阶段的设备
+        tp_groups_cur_stage = tp_groups[self.stage_start_idx : self.stage_end_idx] # 当前阶段的张量并行组
+        default_process_group = dp_groups[0] 
+        self.model_cur_stage = wrap_modules_data_parallel( # 封装当前阶段模块
             module_list=self.model_cur_stage,
             dp_types=dp_types_cur_stage,
             dp_groups=dp_groups_cur_stage,
@@ -208,6 +225,7 @@ class PipelineParallel(nn.Module):
         if self.finalize_wte_grads:
             self.sync_embedding()
 
+    """为流水线模块应用检查点封装"""
     def wrap_pipeline_modules_checkpoint(self, checkpoint_flags, wrap_block_name=None):
         self.checkpoint_flags_stage = checkpoint_flags[self.stage_start_idx : self.stage_end_idx]
         if np.sum(checkpoint_flags) > 0:
@@ -218,6 +236,7 @@ class PipelineParallel(nn.Module):
             if wrap_block_name is not None:  # in this way, checkpoint will be warpped inside FSDP
                 self.checkpoint_flags_stage = [0] * (self.stage_end_idx - self.stage_start_idx)
 
+    """同步词嵌入参数"""
     def sync_embedding(self):
         if self.group_size == 1:
             _allreduce_word_embedding_no_pipeline(
@@ -236,6 +255,7 @@ class PipelineParallel(nn.Module):
                     self.model_cur_stage[-1], self.tied_wte_attr_names[-1], self.embedding_group.group
                 )
 
+    """生成序列并行的LayerNorm信息"""
     def gen_sp_layernorm_info(self, layer_module_types, layer_tp_groups, ln_offset, ln_size, all_block_name):
         if self.sequence_parallel:
             self.layer_tp_groups = layer_tp_groups[self.stage_start_idx : self.stage_end_idx]
@@ -250,12 +270,14 @@ class PipelineParallel(nn.Module):
                         m.sp_group = self.layer_tp_groups[idx]
                 idx += 1
 
+    """设置是否为最后一个批次"""
     def set_last_batch(self, state):
         for block in self.model_cur_stage:
             for m in block.modules():
                 if isinstance(m, FSDP):
                     m.last_batch = state
 
+    """更新张量形状以适应微批次大小"""
     def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, sp_size, template_tensor_shape):
         # Update tensor_shape with correct microbatch_size
         tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
@@ -287,6 +309,7 @@ class PipelineParallel(nn.Module):
                     ]
         return tensor_shape, tensor_shape_last
 
+    """执行无流水线的前向和反向传播"""
     def no_pipeline_forward_backward(
         self,
         batch,
@@ -307,9 +330,9 @@ class PipelineParallel(nn.Module):
         if batch[0][0].shape[0] % self.chunks != 0:
             if self.global_rank == 0:
                 print("[Warning]The global batch size is not divisible by chunks, the results may be skewed.")
-        micro_kwargs = chunk_dict(kwargs, self.chunks)
+        micro_kwargs = chunk_dict(kwargs, self.chunks)  # 分割关键字参数
         microbatches = [chunk_batch(batch[0], self.chunks), chunk_batch(batch[1], self.chunks)]
-        self.real_chunks = len(microbatches[0])
+        self.real_chunks = len(microbatches[0]) # 实际微批次数量
         if self.chunks != self.real_chunks and self.chunk_warning:
             if self.global_rank == 0:
                 print(
@@ -368,6 +391,7 @@ class PipelineParallel(nn.Module):
 
         return losses_reduced
 
+    """执行PipeDream Flush（非交错1F1B）调度"""
     def pipedream_flush_forward_backward(
         self,
         batch,
@@ -402,7 +426,7 @@ class PipelineParallel(nn.Module):
         if num_microbatches > 1 and self.async_grad_reduce:
             enter_no_sync_context(model)
         num_warmup_microbatches = self.group_size - self.group_rank - 1
-        num_warmup_microbatches = min(num_warmup_microbatches, num_microbatches)
+        num_warmup_microbatches = min(num_warmup_microbatches, num_microbatches) # 预热微批次数量
         num_microbatches_remaining = num_microbatches - num_warmup_microbatches
 
         # Compute tensor shapes for all microbatches, note that the last microbatch may have different microbatch_size, thus different shape!

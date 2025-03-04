@@ -7,23 +7,31 @@ import torch
 from galvatron.utils import config2strategy, read_json_config, str2array
 
 
-def get_pp_ranks_enc(pp_divide):
+def get_pp_ranks_enc(pp_divide): # pp_divide = [2,3,5] 表示有3个GPU，第一个GPU上有2层，第二个GPU上有3层，第三个GPU上有5层
     pp_ranks_enc = []
     pp_deg = len(pp_divide)
     for i in range(pp_deg):
         pp_ranks_enc += [i] * pp_divide[i]
-    return pp_ranks_enc
+    return pp_ranks_enc # 最终的输出形式貌似是[[1],[1],[2],[2],[2],[3],[3],[3],[3],[3]] 意思就是模型的第1，2层在GPU1上，第3-5层在GPU2上，第6-10层在GPU3上
 
 
 def get_hybrid_parallel_configs_api(config, args, model_info):
     local_rank = args.local_rank
     world_size = torch.distributed.get_world_size()
+    
+    # 判断配置来源: ①如果设置了galvatron_config_path，则就是json类型，通过从该json文件中获得， ②否则就是全局类型
     config_type = "JSON" if args.galvatron_config_path not in [None, "None"] else "GLOBAL"
+    
+    # 获得模型各部分的层数列表 # [note] 注意以下model_info的传递!
     layernum_list = model_info(config, args).layernums()
     total_layer_num = sum(layernum_list)
+    
+    # 开始打印
     if local_rank == 0:
         print("======================== Galvatron Parallel Config =============================")
         print("Galvatron parallel config mode: [%s config mode]" % config_type)
+    
+    # 不是json文件的情况
     if config_type == "GLOBAL":
         pp_deg = args.pp_deg
         tp_sizes_enc = [args.global_tp_deg] * total_layer_num if args.global_tp_deg > 0 else [1] * total_layer_num
@@ -39,7 +47,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         else:
             args.vocab_sp = 0
             use_sp = [0] * total_layer_num
-    else:
+    else: # [note]使用json文件，暂未详细阅读代码
         if isinstance(args.galvatron_config_path, str):
             galvatron_config = read_json_config(args.galvatron_config_path)
         else:
@@ -81,7 +89,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         args.vocab_tp = vtp
         args.vocab_sp = vsp
 
-    if pp_divide is None:
+    if pp_divide is None:  # 未指定流水线分割方案，则均分
         avg_layer_num = total_layer_num // pp_deg
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg - 1)
         pp_divide = [avg_layer_num] * (pp_deg - 1) + [last_layer_num]
@@ -91,6 +99,9 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     assert (
         args.global_train_batch_size % (world_size // pp_deg // min_tp) == 0
     ), "global_train_batch_size should be multiple of world_size//pp_deg!"
+    
+    
+    # 混合并行配置 # [important]
     hybrid_parallel_configs = {
         "pp_deg": pp_deg,
         "tp_sizes_enc": tp_sizes_enc,
@@ -106,6 +117,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         "global_train_batch_size": args.global_train_batch_size,
     }
 
+    # 如果使用分布式检查点，验证配置一致性
     if args.distributed_checkpoint:
         json_path = os.path.join(args.load, f"hybrid_parallel_configs.json")
         checkponit_hybrid_parallel_configs = json.load(open(json_path, "r"))
@@ -151,9 +163,11 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
                 % (args.pipeline_type, args.default_dp_type, args.mixed_precision, embed_sdp)
             )
             print_hp_configs(hybrid_parallel_configs)
+            
     return hybrid_parallel_configs
 
 
+# 用于被继承
 class ModelInfo:
     def __init__(self):
         return
@@ -226,7 +240,24 @@ def print_hp_configs(hp_configs):
     print("================================================================================")
 
 
+# 在runtime/hybrid_parallel_model.py中被调用过一次
 def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0):
+    """_summary_
+
+    根据模块类型生成整个模型的混合并行配置，包括编码器/解码器部分和嵌入层部分。
+
+    参数:
+        module_types (list): 模型的模块类型列表，例如["embed", "enc", "dec", "embed"]
+        hp_configs (dict): 主模型部分的混合并行配置（如编码器/解码器的配置）
+        embed_sdp (int, 可选，默认值为0): 嵌入层是否使用分片数据并行（0表示否，1表示是）
+        embed_ckpt (int, 可选，默认值为0): 嵌入层的检查点标志（0表示不保存，1表示保存）
+        vocab_tp (int, 可选，默认值为1): 词汇表的张量并行度
+        vocab_sp (int, 可选，默认值为0): 词汇表的序列并行度（0表示不使用，1表示使用）
+
+    返回:
+        hp_configs_whole (dict): 整个模型的混合并行配置，包括所有层的并行参数
+    """
+    
     pp_deg, tp_sizes_enc, use_sp, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = (
         hp_configs["pp_deg"],
         hp_configs["tp_sizes_enc"],
@@ -252,19 +283,22 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
 
     idx_enc = 0
     for module_type in module_types:
-        if module_type[-3:] == "enc" or module_type[-3:] == "dec":
-            if use_sp[idx_enc] == 1:
+        if module_type[-3:] == "enc" or module_type[-3:] == "dec": # 处理编码器和解码器
+            if use_sp[idx_enc] == 1:  # 如果该layer使用序列并行
+                # 序列并行度取张量并行度，张量并行度设为1
                 hp_configs_whole["sp_sizes_whole"].append(tp_sizes_enc[idx_enc])
                 hp_configs_whole["tp_sizes_whole"].append(1)
             else:
+                # 张量并行度保持不变，序列并行度设为1
                 hp_configs_whole["tp_sizes_whole"].append(tp_sizes_enc[idx_enc])
                 hp_configs_whole["sp_sizes_whole"].append(1)
+            # 填充其他配置项，使用编码器和解码器的对应值
             hp_configs_whole["dp_types_whole"].append(dp_types_enc[idx_enc])
             hp_configs_whole["pp_ranks_whole"].append(pp_ranks_enc[idx_enc])
             hp_configs_whole["tp_consec_whole"].append(tp_consecutive_flags[idx_enc])
             hp_configs_whole["checkpoint_flags_whole"].append(checkpoint_flags_enc[idx_enc])
             idx_enc += 1
-        else:
+        else: # 对嵌入层
             if vocab_sp == 1:
                 hp_configs_whole["sp_sizes_whole"].append(vocab_tp)
                 hp_configs_whole["tp_sizes_whole"].append(1)
@@ -283,6 +317,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
         world_size // pp_deg // tp_size // sp_size
         for tp_size, sp_size in zip(hp_configs_whole["tp_sizes_whole"], hp_configs_whole["sp_sizes_whole"])
     ]
+    
     from galvatron.core import get_args
 
     if get_args().local_rank == 0:
@@ -295,6 +330,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
             if isinstance(hp_configs_whole[key], (list, tuple)):
                 test_dict[key + "_check"] = get_enc_groups(hp_configs_whole[key], module_types)
         # print_hp_configs(test_dict)
+    
     return hp_configs_whole
 
 
@@ -306,11 +342,11 @@ def get_enc_groups(groups_whole, module_types):
             groups.append(groups_whole[i])
     return groups
 
-
+# 仅仅就是一个map而已
 def mixed_precision_dtype(mixed_precision):
     return {"fp32": torch.float, "fp16": torch.float16, "bf16": torch.bfloat16}[mixed_precision]
 
-
+# 该函数在runtime/hybrid_parallel_model.py中被调用过一次
 def layer_shapes_dtypes_whole_model(module_types, layernum_list, layer_shapes_list, layer_dtypes_list):
     assert len(layernum_list) == len(layer_shapes_list)
     assert len(layernum_list) == len(layer_dtypes_list)
@@ -341,6 +377,7 @@ def layer_shapes_dtypes_whole_model(module_types, layernum_list, layer_shapes_li
 
 
 def get_chunks(args):
+    # 如果没有指定micro_batch，则根据pp_deg和world_size自动计算
     if args.chunks == -1:
         args.chunks = 1
         if args.pp_deg > 1:

@@ -15,10 +15,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from .redistribute import fused_split_allgather
 
-
+# 获取需要初始化的模块列表，用于参数重置
+# 仅在param_init_fn函数中被调用一次
 def _get_modules_to_materialize(root_module: nn.Module) -> List[nn.Module]:
     # Run BFS to collect the modules to materialize via `reset_parameters()`,
     # stopping at any module with FSDP already applied
+    
+    """通过BFS遍历模型，收集需要通过 reset_parameters() 初始化的模块，遇到已应用FSDP的模块停止"""
+    
     module_names_to_materialize: List[nn.Module] = []
     modules_to_materialize: List[nn.Module] = []
     queue = collections.deque([("", root_module)])
@@ -27,7 +31,7 @@ def _get_modules_to_materialize(root_module: nn.Module) -> List[nn.Module]:
         name, module = queue.popleft()
         module_names_to_materialize.append(name)
         modules_to_materialize.append(module)
-        for child_name, child_module in module.named_children():
+        for child_name, child_module in module.named_children():   # 子模块
             if child_module not in visited_modules and _get_module_fsdp_state(child_module) is None:
                 visited_modules.add(child_module)
                 if name == "":
@@ -37,7 +41,8 @@ def _get_modules_to_materialize(root_module: nn.Module) -> List[nn.Module]:
 
     return module_names_to_materialize, modules_to_materialize
 
-
+# 数据并行封装函数，支持不同类型的分布式并行
+# 为单个模块
 def wrap_data_parallel(
     module,
     dp_type=None,
@@ -52,15 +57,15 @@ def wrap_data_parallel(
     all_block_name=None,
     load_module_func=None,
 ):
-    if dp_type is None:
+    if dp_type is None: # 如果未指定数据并行类型，直接返回原始模块 #[note] 查看一下参数传递，dp_type是在哪里被设置的
         return module
     else:
-        assert pp_device is not None
+        assert pp_device is not None # 确保指定了流水线设备 # [note] 为什么需要一定有pp
         from galvatron.core import get_args
 
         fsdp_type_dict = {0: get_args().default_dp_type, 1: "zero3"}
         assert dp_type in fsdp_type_dict.keys()
-        return wrap_module_fsdp_manually(
+        return wrap_module_fsdp_manually(  # 调用手动FSDP封装函数，将data_parallel交由FSDP处理
             module,
             pp_device,
             module_type,
@@ -75,20 +80,20 @@ def wrap_data_parallel(
             load_module_func=load_module_func,
         )
 
-
+# 参数初始化函数，用于FSDP的延迟初始化
 def param_init_fn(all_block_name, load, distributed_checkpoint, tp_groups, load_module_func, module):
     m = module
     if isinstance(m, tuple(all_block_name)):
-        m.to_empty(device=torch.device("cuda"))
-        module_names_to_materialize, modules_to_materialize = _get_modules_to_materialize(m)
+        m.to_empty(device=torch.device("cuda")) # 将模块移到空的CUDA设备
+        module_names_to_materialize, modules_to_materialize = _get_modules_to_materialize(m) # 获取需要初始化的子模块# 获取需要初始化的子模块
         for name, submodule in zip(module_names_to_materialize, modules_to_materialize):
-            if callable(getattr(submodule, "reset_parameters", None)):
+            if callable(getattr(submodule, "reset_parameters", None)): # 检查是否有 reset_parameters 方法
                 if load == None:
                     submodule.reset_parameters()
                 else:
                     load_module_func(load, tp_groups, name, submodule, m, distributed_checkpoint)
 
-
+# 手动封装模块为FSDP
 def wrap_module_fsdp_manually(
     module,
     pp_device,
@@ -113,10 +118,10 @@ def wrap_module_fsdp_manually(
 
     args = get_args()
 
-    mixed_precision_policy = MixedPrecision(
-        param_dtype=mixed_precision,  # Param precision
-        reduce_dtype=torch.float if args.reduce_in_fp32 else mixed_precision,  # Gradient communication precision
-        buffer_dtype=mixed_precision,  # Buffer precision
+    mixed_precision_policy = MixedPrecision( # 配置混合精度策略
+        param_dtype=mixed_precision,  # Param precision # 参数精度
+        reduce_dtype=torch.float if args.reduce_in_fp32 else mixed_precision,  # Gradient communication precision # 梯度通信精度
+        buffer_dtype=mixed_precision,  # Buffer precision # 缓冲区精度
         cast_forward_inputs=True,
         cast_root_forward_inputs=True,
     )
@@ -127,15 +132,17 @@ def wrap_module_fsdp_manually(
         mixed_precision=mixed_precision_policy,
         # backward_prefetch=backward_prefetch,
         device_id=pp_device,
-        param_init_fn=(
+        param_init_fn=( # 参数初始化函数
             partial(
                 param_init_fn, all_block_name, args.load, args.distributed_checkpoint, tp_groups.group, load_module_func
             )
             if args.initialize_on_meta
             else None
         ),
-        limit_all_gathers=True,
+        limit_all_gathers=True, # 限制all_gather操作以优化性能
     )
+    
+    # 如果指定了封装块名称
     # Wrap given block
     if wrap_block_name is not None:
         if "enc" in module_type or "dec" in module_type:
@@ -157,6 +164,7 @@ def wrap_module_fsdp_manually(
             # module = FSDP(module, **fsdp_args)
         return module
 
+    # 根据模块类型手动封装
     # Wrap manually
     if module_type in ["bert_enc", "vit_enc"]:
         sub_module = module.module.layer[0]
@@ -198,8 +206,9 @@ def wrap_module_fsdp_manually(
         else:
             return FSDP(module.to(pp_device), **fsdp_args)
 
-
+# 应用FSDP到指定模块块(用pytorch自己写的代码)
 def apply_fsdp(model, fsdp_args, wrap_block_name):
+    """将FSDP递归应用到指定模块块"""
     check_fn = lambda submodule: (any(isinstance(submodule, block) for block in wrap_block_name))
     _recursive_wrap(
         module=model,
@@ -212,8 +221,9 @@ def apply_fsdp(model, fsdp_args, wrap_block_name):
     )
     return model
 
-
+# 应用检查点到指定模块块(用pytorch自己写的代码)
 def apply_ckpt(model, checkpoint_wrapper_fn, wrap_block_name):
+    """将检查点封装应用到指定模块块"""
     check_fn = lambda submodule: (any(isinstance(submodule, block) for block in wrap_block_name))
     _recursive_wrap(
         module=model,
@@ -225,7 +235,7 @@ def apply_ckpt(model, checkpoint_wrapper_fn, wrap_block_name):
     )
     return model
 
-
+# 为模块列表应用检查点
 def wrap_modules_checkpoint(module_list, checkpoint_flags, wrap_block_name=None):
     m = module_list
     if isinstance(m, FSDP):
@@ -239,13 +249,13 @@ def wrap_modules_checkpoint(module_list, checkpoint_flags, wrap_block_name=None)
                 m[i] = checkpoint_wrapper(m[i])
     return module_list
 
-
+# 为整个模型应用检查点
 def wrap_model_checkpoint(model, wrap_block_names=[]):
     model_ = model._fsdp_wrapped_module if isinstance(model, FSDP) else model
     apply_ckpt(model_, checkpoint_wrapper, wrap_block_names)
     return model
 
-
+# 重定位激活值，支持分布式操作
 def relocate_activations(input, allgather_group, split_group, fused_allgather_group, fused_split_group, is_input):
     if fused_allgather_group is not None or fused_split_group is not None:
         input = fused_split_allgather(
@@ -264,7 +274,7 @@ def relocate_activations(input, allgather_group, split_group, fused_allgather_gr
         input = allgather_group.allgather(input.contiguous(), is_input)
     return input
 
-
+# 支持重定位的模块类
 class Module_with_relocation(nn.Module):
     def __init__(self, module, allgather_group, split_group, fused_allgather_group, fused_split_group):
         super().__init__()
@@ -293,7 +303,8 @@ class Module_with_relocation(nn.Module):
             input_relocated = self.relocate_activations(inputs)
             return self.module(input_relocated, **kwargs)
 
-
+# 为模块列表应用数据并行
+# 为模块列表
 def wrap_modules_data_parallel(
     module_list,
     dp_types,
@@ -320,9 +331,10 @@ def wrap_modules_data_parallel(
 
     if pp_devices is not None:
         assert len(pp_devices) == len(module_list)
+        
     for i in range(len(module_list)):
         pp_device = None if pp_devices is None else pp_devices[i]
-        module_list[i] = wrap_data_parallel(
+        module_list[i] = wrap_data_parallel( # 为每个模块应用数据并行
             module_list[i],
             dp_types[i],
             dp_groups[i],
@@ -336,6 +348,7 @@ def wrap_modules_data_parallel(
             all_block_name=all_block_name,
             load_module_func=load_module_func,
         )
+        
     args = get_args()
     sharding_strategy = {
         "ddp": ShardingStrategy.NO_SHARD,
@@ -366,7 +379,7 @@ def wrap_modules_data_parallel(
     module_list = FSDP(module_list, **fsdp_args)
     return module_list
 
-
+# 为整个模型应用数据并行(该函数被一处调用过，但是那一处没有被其他位置调用，约等于该函数没有被使用过)
 def wrap_model_data_parallel(
     model,
     device,
@@ -406,13 +419,13 @@ def wrap_model_data_parallel(
     model = FSDP(model, **fsdp_args)
     return model
 
-
+# 将模块列表移动到指定设备
 def modules_to_devices(module_list, pp_devices):
     assert len(module_list) == len(pp_devices)
     for i in range(len(module_list)):
         module_list[i].to("cuda:%d" % pp_devices[i])
 
-
+# 为模块列表应用重定位
 def wrap_modules_relocation(module_list, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups):
     assert len(module_list) == len(allgather_groups)
     assert len(module_list) == len(split_groups)

@@ -4,6 +4,9 @@ from .redistribute import gather_from_group, split_to_group
 
 
 class CommGroup(object):
+    """
+        通信组类，用于管理rank并创建对应的分布式通信组
+    """
     def __init__(self, ranks):
         assert isinstance(ranks, list) or isinstance(
             ranks, range
@@ -51,7 +54,7 @@ def get_world_size(world_ranks=None):
         assert isinstance(world_ranks, list)
         return len(world_ranks)
 
-
+# 获取当前进程在组内的rank
 def get_group_rank(world_ranks=None):
     if world_ranks is None:
         return torch.distributed.get_rank()
@@ -59,7 +62,7 @@ def get_group_rank(world_ranks=None):
         assert isinstance(world_ranks, list)
         return world_ranks.index(torch.distributed.get_rank())
 
-
+# [confused] 没有看懂这个的作用，以及上述好几个函数的作用。貌似是分布式训练中通信组的一些编号存在局部和全局等等的因素
 def index_ranks(ranks, world_ranks=None):
     if world_ranks is None:
         return ranks
@@ -68,28 +71,30 @@ def index_ranks(ranks, world_ranks=None):
         return [world_ranks[i] for i in ranks]
 
 
-def gen_tp_group_dist(tp_size, pp_size, to_print=True, consecutive=True, world_ranks=None):
+# [confused] 不是很理解这个操作
+# 生成张量并行通信组
+def gen_tp_group_dist(tp_size, pp_size, to_print=True, consecutive=True, world_ranks=None): # consecutive:是否连续分配rank
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
     all_tp_groups, tp_group = [], None
     dp_size = world_size // tp_size // pp_size
-    num_pp_groups = world_size // pp_size
-    num_tp_groups = world_size // tp_size
+    num_pp_groups = world_size // pp_size  # 假设world_size=16, tp_size=2,pp_size=4,则num_pp_groups=4
+    num_tp_groups = world_size // tp_size # 此时num_tp_groups=8 意思为一个tp下需要8块GPU
 
-    if consecutive:
-        for i in range(num_tp_groups):
-            ranks = range(i * tp_size, (i + 1) * tp_size)
+    if consecutive:  # 如果连续分配
+        for i in range(num_tp_groups): # 0 <= i < 8
+            ranks = range(i * tp_size, (i + 1) * tp_size)  # ranks = [0, 2), [2, 4)
             ranks = index_ranks(ranks, world_ranks)
             group = CommGroup(ranks)
             all_tp_groups.append(group)
-            if group.has_rank(rank):
+            if group.has_rank(rank):  # 此处的rank为torch.dist.get_rank()返回的rank，表示本进程的rank
                 tp_group = group
     else:
-        for i in range(pp_size):
-            start_rank = i * num_pp_groups
-            end_rank = (i + 1) * num_pp_groups
-            for j in range(dp_size):
-                ranks = range(start_rank + j, end_rank, dp_size)
+        for i in range(pp_size): # i = [0, 4), num_pp_groups = 4
+            start_rank = i * num_pp_groups # start_rank = 0, 4, 8, 12
+            end_rank = (i + 1) * num_pp_groups  # end_rank = 4, 8, 12, 16
+            for j in range(dp_size):  # dp_size = 16/2/4 = 2
+                ranks = range(start_rank + j, end_rank, dp_size) # 此时ranks= range(0,4,2), range(1,4,2)
                 ranks = index_ranks(ranks, world_ranks)
                 group = CommGroup(ranks)
                 all_tp_groups.append(group)
@@ -101,7 +106,7 @@ def gen_tp_group_dist(tp_size, pp_size, to_print=True, consecutive=True, world_r
         show_groups(all_tp_groups)
     return tp_group
 
-
+# [confused]以下所有gen_xx_group_dist都是类似的, 还不是很理解这个操作
 def gen_dp_group_dist(tp_size, pp_size, to_print=True, consecutive=False, world_ranks=None):
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
@@ -316,24 +321,43 @@ def gen_seq_data_group_dist(pp_size, to_print, world_ranks=None):
 
 
 def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, show_rank=-1, world_ranks=None):
+    """_summary_
+    参数:
+        all_tp_sizes (list): 所有 TP 并行度列表。
+        all_sp_sizes (list): 所有 SP 并行度列表。
+        pp_size (int): 流水线并行度。
+        tp_consecutive_flags (list): TP 连续性标志列表。
+        show_rank (int, optional): 显示通信组信息的 Rank，默认 -1（不显示）。
+        world_ranks (list or None, optional): 自定义的世界 Rank 列表，默认 None。
+
+    返回:
+        tuple: 包含 PP 组、TP 组、SP 组、DP 组、序列数据组、AllGather 组、Split 组、融合 AllGather 组、融合 Split 组和嵌入组。
+    """
     world_ranks = sort_ranks(world_ranks)
     world_size = get_world_size(world_ranks)
     world_size_per_stage = world_size // pp_size
+    # 检查TP和SP的兼容性
     for i in range(len(all_tp_sizes)):
         assert (
             all_tp_sizes[i] == 1 or all_sp_sizes[i] == 1
         ), "DeepSpeed Ulysses is not compatible with Megatron Tensor Parallel!"
+    # 调整TP连续性标志 # [confused]
     for i in range(len(all_tp_sizes)):
         tp_consec = tp_consecutive_flags[i]
         assert tp_consec == 0 or tp_consec == 1
         if all_tp_sizes[i] in [1, world_size_per_stage]:
             tp_consecutive_flags[i] = 1
+    
     tp_groups, dp_groups, sp_groups = [], [], []
     dp_groups = []
     allgather_groups, split_groups = [None], [None]
     fused_split_groups, fused_allgather_groups = [None], [None]
+    
+    # 生成PP和嵌入组
     pp_group, all_pp_groups = gen_pp_group_dist(pp_size, to_print=False, world_ranks=world_ranks)
     embedding_group = gen_embedding_group_dist(pp_size, all_pp_groups, to_print=False)
+    
+    # 生成TP、DP、SP组字典
     tp_group_dict, dp_group_dict, sp_group_dict = {}, {}, {}
     for consec in [0, 1]:
         tp_group_dict[consec] = get_tp_group_dict_dist(all_tp_sizes, pp_size, consec, world_ranks=world_ranks)
@@ -341,10 +365,14 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
             all_tp_sizes, all_sp_sizes, pp_size, consec, world_ranks=world_ranks
         )
         sp_group_dict[consec] = get_sp_group_dict_dist(all_sp_sizes, pp_size, consec, world_ranks=world_ranks)
+    
+    # 根据连续性标志选择组
     for i in range(len(all_tp_sizes)):
         tp_groups.append(tp_group_dict[tp_consecutive_flags[i]][all_tp_sizes[i]])
         dp_groups.append(dp_group_dict[1 - tp_consecutive_flags[i]][all_tp_sizes[i] * all_sp_sizes[i]])
         sp_groups.append(sp_group_dict[tp_consecutive_flags[i]][all_sp_sizes[i]])
+    
+    # 生成重新分配和融合组
     for i in range(1, len(all_tp_sizes)):
         if all_tp_sizes[i - 1] != 1:
             old_tp_size = all_tp_sizes[i - 1]
@@ -369,9 +397,12 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
         split_groups.append(split_group)
         fused_split_groups.append(fused_split_group)
         fused_allgather_groups.append(fused_allgather_group)
-
+    
+    # 生成序列数据组
     seq_data_group = gen_seq_data_group_dist(pp_size, to_print=True, world_ranks=world_ranks)
     seq_data_groups = [seq_data_group if all_tp_sizes[i] == 1 else dp_groups[i] for i in range(len(all_tp_sizes))]
+    
+    # 显示通信组信息
     show_rank = 0
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print("====================== Galvatron Communication Group ===========================")
@@ -394,6 +425,8 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
         print("Fused allgather groups for rank %d:" % show_rank)
         show_groups(fused_allgather_groups)
         print("================================================================================")
+    
+    # 返回
     return (
         pp_group,
         tp_groups,

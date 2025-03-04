@@ -5,24 +5,27 @@ from einops import rearrange
 #     get_global_memory_buffer,
 # )
 
-
+# 定义一个函数，用于沿第一维分割张量，并保留对应切片（支持序列并行）
+# 仅仅在文件的_Split和_Gather类中各被调用一次
 def _split_along_first_dim_with_sequence_parallel(input_, group):
-    """Split the tensor along its first dimension and keep the
-    corresponding slice."""
+    """Split the tensor along its first dimension and keep the corresponding slice."""
+    """沿第一维分割张量，并保留对应切片，支持序列并行"""
     from galvatron.core import get_args
 
     args = get_args()
 
     world_size = torch.distributed.get_world_size(group=group)
     # Bypass the function if we are using only 1 GPU.
-    if world_size == 1:
+    if world_size == 1: # 如果只有1个GPU，直接返回输入
         return input_
-    if args.sequence_parallel:
+    
+    
+    if args.sequence_parallel: # 如果启用序列并行
         dim_size = list(input_.size())
-        dim_size[0] = dim_size[0] * world_size
+        dim_size[0] = dim_size[0] * world_size # 第一维扩展为 world_size 倍
         output = torch.empty(dim_size, dtype=input_.dtype, device=torch.cuda.current_device())
         # get_global_memory_buffer().get_tensor(dim_size, input_.dtype, "mpu")
-        handle = torch.distributed._all_gather_base(output, input_, group=group)
+        handle = torch.distributed._all_gather_base(output, input_, group=group) # 执行分布式 all_gather 操作 # [confused]看不懂
     else:
         output = input_
 
@@ -44,7 +47,7 @@ def _split_along_first_dim_with_sequence_parallel(input_, group):
     # print("split"+str(torch.cuda.current_device())+str(input_.shape)+str(output.shape))
     return output.contiguous()
 
-
+# 定义一个函数，用于沿第一维收集张量并拼接（支持序列并行）
 def _gather_along_first_dim_with_sequence_parallel(input_, group):
     """Gather tensors and concatinate along the first dimension."""
     from galvatron.core import get_args
@@ -81,7 +84,7 @@ def _gather_along_first_dim_with_sequence_parallel(input_, group):
     # print("gather"+str(torch.cuda.current_device())+str(input_.shape)+str(output.shape))
     return output.contiguous()
 
-
+# 定义一个简单分割函数，不支持序列并行
 def _split_along_first_dim(input_, group):
     """Split the tensor along its first dimension and keep the
     corresponding slice."""
@@ -102,7 +105,7 @@ def _split_along_first_dim(input_, group):
 
     return output
 
-
+# 定义一个简单收集函数，不支持序列并行
 def _gather_along_first_dim(input_, group):
     """Gather tensors and concatinate along the first dimension."""
 
@@ -120,6 +123,7 @@ def _gather_along_first_dim(input_, group):
     return output
 
 
+# 定义一个分割的自动求导类
 class _Split(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
 
@@ -143,7 +147,7 @@ class _Split(torch.autograd.Function):
         else:
             return _gather_along_first_dim_with_sequence_parallel(grad_output, ctx.group), None, None
 
-
+# 定义一个收集的自动求导类
 class _Gather(torch.autograd.Function):
     """Gather the input from model parallel region and concatinate."""
 
@@ -167,15 +171,17 @@ class _Gather(torch.autograd.Function):
         else:
             return _split_along_first_dim_with_sequence_parallel(grad_output, ctx.group), None, None
 
-
+# 分割函数的封装
 def split_to_group(input_, group, is_input):
+    """将张量分割到指定组"""
     return _Split.apply(input_, group, is_input)
 
-
+# 收集函数的封装
 def gather_from_group(input_, group, is_input):
+    """从指定组收集张量"""
     return _Gather.apply(input_, group, is_input)
 
-
+# 定义融合的分割与收集函数，不支持序列并行
 def _fused_split_allgather_along_first_dim(
     input_, allgather_group, split_group, fused_allgather_group, fused_split_group
 ):
@@ -211,7 +217,7 @@ def _fused_split_allgather_along_first_dim(
         torch.distributed.all_gather_into_tensor(output, input_.contiguous(), group=group)
         return output
 
-
+# 定义融合的分割与收集函数，支持序列并行
 def _fused_split_allgather_along_first_dim_with_sequence_parallel(
     input_, allgather_group, split_group, fused_allgather_group, fused_split_group
 ):
@@ -280,7 +286,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(
     # print(output.shape, output.stride(), torch.cuda.current_device())
     return output.contiguous()
 
-
+# 定义融合分割与收集的自动求导类
 class _Fused_split_allgather(torch.autograd.Function):
 
     @staticmethod
@@ -324,7 +330,7 @@ class _Fused_split_allgather(torch.autograd.Function):
                 None,
             )
 
-
+# 融合分割与收集函数的封装
 def fused_split_allgather(input_, is_input, allgather_group, split_group, fused_allgather_group, fused_split_group):
     return _Fused_split_allgather.apply(
         input_, is_input, allgather_group, split_group, fused_allgather_group, fused_split_group

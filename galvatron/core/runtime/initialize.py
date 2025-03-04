@@ -3,7 +3,8 @@ from contextlib import contextmanager
 import torch
 import torch.nn as nn
 
-
+# init_empty_weights函数在其他诸多文件被使用，如galvatron/model/llama_hf/xxx_hyrbrid_parallel.py
+# 该函数偏效率优化，和galvatron的核心设计相关性较低
 @contextmanager
 def init_empty_weights(include_buffers: bool = True):
     """
@@ -25,17 +26,17 @@ def init_empty_weights(include_buffers: bool = True):
         tst = nn.Sequential(*[nn.Linear(10000, 10000) for _ in range(1000)])
     ```
 
-    <Tip warning={true}>
 
     Any model created under this context manager has no weights. As such you can't do something like
     `model.to(some_device)` with it. To load weights inside your empty model, see [`load_checkpoint_and_dispatch`].
 
-    </Tip>
     """
     with init_on_device(torch.device("meta"), include_buffers=include_buffers) as f:
         yield f
 
 
+# 该函数仅仅在本文件的init_empty_weights函数中被调用一次
+# 然后init_empty_weights函数在其他诸多文件被使用，如galvatron/model/llama_hf/xxx_hyrbrid_parallel.py
 @contextmanager
 def init_on_device(device: torch.device, include_buffers: bool = True):
     """
