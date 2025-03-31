@@ -68,9 +68,16 @@ def llama_model_hp(config, args):
     else:
         llama_model = LlamaForCausalLM(config)
 
+    param_num = sum(p.numel() for p in llama_model.parameters())
+    # print(f'[guangming] model: {llama_model}, param_num = {param_num}')
+
     model = construct_hybrid_parallel_model(
         model=llama_model, model_config=config, training_args=args, hybrid_parallel_configs=hybrid_parallel_configs
     )
+    
+    param_num = sum(p.numel() for p in llama_model.parameters())
+    # print(f'[guangming] model: {model}, param_num = {param_num}')
+    
     return model
 
 

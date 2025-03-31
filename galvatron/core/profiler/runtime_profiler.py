@@ -2,6 +2,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import torch
+import torch.distributed
 
 from .base_profiler import BaseProfiler
 from .utils import print_peak_memory, save_profiled_memory, save_profiled_time
@@ -248,7 +249,7 @@ class RuntimeProfiler(BaseProfiler):
         elif iter == self.end_iter:
             self.total_end_time = time.time()
             avg_time = (self.total_end_time - self.total_start_time) / (self.end_iter - self.start_iter)
-            print(f"Average iteration time is: {avg_time:.4f} s")
+            print(f"[rank {torch.distributed.get_rank()}]Average iteration time is: {avg_time:.4f} s")
 
             args = self.args
             if hasattr(args, "profile_forward") and args.profile_forward:
@@ -267,7 +268,7 @@ class RuntimeProfiler(BaseProfiler):
     def _process_time_results(self) -> None:
         """Process and save time profiling results"""
         avg_time = sum(self.time_list) / len(self.time_list)
-        print(f"Average iteration time is: {avg_time:.4f} s")
+        print(f"[rank {torch.distributed.get_rank()}]Average iteration time is: {avg_time:.4f} s")
 
         args = self.args
         if hasattr(args, "profile_forward") and args.profile_forward:

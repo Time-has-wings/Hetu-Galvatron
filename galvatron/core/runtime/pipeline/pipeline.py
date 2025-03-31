@@ -400,10 +400,11 @@ class PipelineParallel(nn.Module):
         # Compute number of warmup microbatches.
         num_microbatches = self.real_chunks
         if num_microbatches > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
+            enter_no_sync_context(model)  # [note] 考虑了async_grad_reduce的情况
         num_warmup_microbatches = self.group_size - self.group_rank - 1
         num_warmup_microbatches = min(num_warmup_microbatches, num_microbatches)
         num_microbatches_remaining = num_microbatches - num_warmup_microbatches
+        # print(f"[guangming]: num_warmup_microbatches: {num_warmup_microbatches}, num_microbatches_remaining: {num_microbatches_remaining}")
 
         # Compute tensor shapes for all microbatches, note that the last microbatch may have different microbatch_size, thus different shape!
         batch_size = batch[0][0].shape[0] * self.dp_size_input
@@ -684,7 +685,7 @@ class PipelineParallel(nn.Module):
         if self.info:
             print("rank %d" % self.global_rank, "finish cooldown")
 
-        if num_microbatches > 1 and self.async_grad_reduce:
+        if num_microbatches > 1 and self.async_grad_reduce:  # [note] 考虑了async_grad_reduce的情况
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
 
