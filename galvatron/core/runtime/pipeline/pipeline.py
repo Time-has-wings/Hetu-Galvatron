@@ -153,6 +153,7 @@ class PipelineParallel(nn.Module):
         self.finalize_wte_grads = (
             tied_wte_attr_names is not None
         )  #  and self.total_model_len > len(self.model_cur_stage)
+        print("[graduation] (galvatron/core/runtime/pipeline/pipeline.py) finalize_wte_grads: ", self.finalize_wte_grads)
 
     def check_tensor_dtype(self, layer_output_tensor_shapes, layer_output_tensor_dtypes):
         assert len(layer_output_tensor_shapes) == len(layer_output_tensor_dtypes)
@@ -189,7 +190,7 @@ class PipelineParallel(nn.Module):
         dp_groups_cur_stage = dp_groups[self.stage_start_idx : self.stage_end_idx]
         pp_devices_cur_stage = [self.local_rank] * (self.stage_end_idx - self.stage_start_idx)
         tp_groups_cur_stage = tp_groups[self.stage_start_idx : self.stage_end_idx]
-        default_process_group = dp_groups[0]
+        default_process_group = dp_groups[0]  # [note] 在此处选择默认通信组 即为dp_gropus[0] 其中dp_groups是函数参数，实际是在hybrid_pparallel_model.py中被调用，其中dp_groups是seq_groups，即sharding的group
         self.model_cur_stage = wrap_modules_data_parallel(
             module_list=self.model_cur_stage,
             dp_types=dp_types_cur_stage,
@@ -211,6 +212,7 @@ class PipelineParallel(nn.Module):
     def wrap_pipeline_modules_checkpoint(self, checkpoint_flags, wrap_block_name=None):
         self.checkpoint_flags_stage = checkpoint_flags[self.stage_start_idx : self.stage_end_idx]
         if np.sum(checkpoint_flags) > 0:
+            print('[graduation] (galvatron.core.runtime.pipeline.pipeline.py) will apply checkpoint')
             assert self.total_model_len == len(checkpoint_flags)
             self.model_cur_stage = wrap_modules_checkpoint(
                 self.model_cur_stage, self.checkpoint_flags_stage, wrap_block_name=wrap_block_name
@@ -328,6 +330,7 @@ class PipelineParallel(nn.Module):
 
         self.set_last_batch(False)
 
+        # print(f"[graduation] num_microbatches is {num_microbatches}")
         for i in range(num_microbatches):
             if i == num_microbatches - 1:
                 self.set_last_batch(True)
@@ -400,7 +403,7 @@ class PipelineParallel(nn.Module):
         # Compute number of warmup microbatches.
         num_microbatches = self.real_chunks
         if num_microbatches > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)  # [note] 考虑了async_grad_reduce的情况
+            enter_no_sync_context(model) 
         num_warmup_microbatches = self.group_size - self.group_rank - 1
         num_warmup_microbatches = min(num_warmup_microbatches, num_microbatches)
         num_microbatches_remaining = num_microbatches - num_warmup_microbatches

@@ -1,4 +1,5 @@
 import torch
+import torch.distributed
 
 from .redistribute import gather_from_group, split_to_group
 
@@ -8,13 +9,13 @@ class CommGroup(object):
         assert isinstance(ranks, list) or isinstance(
             ranks, range
         ), "Rank list or range should be provided to create a CommGroup!"
-        self.ranks = sorted(list(set(list(ranks))))
+        self.ranks = sorted(list(set(list(ranks))))  # 去重并排序
         self.size = len(self.ranks)
         self.group = torch.distributed.new_group(self.ranks)
 
     def has_rank(self, rank):
         if rank in self.ranks:
-            self.intra_group_id = self.ranks.index(rank)
+            self.intra_group_id = self.ranks.index(rank)  # 组内id
             return True
         return False
 
@@ -33,7 +34,7 @@ def show_groups(groups):
         if group is None:
             print("None", end=" ")
         else:
-            group.print()
+            group.print()  # 此处是调用CommGroup.print
     print()
 
 
@@ -301,7 +302,8 @@ def gen_seq_data_group_dist(pp_size, to_print, world_ranks=None):
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
     all_seq_data_groups, seq_data_group_group = [], None
     seq_data_world_size = world_size // pp_size
-    for i in range(pp_size):
+    # print('[graduation] (galvatron/core/runtime/comm_groups.py:151) gen_seq_data_group_dist seq_data_world_size : ', seq_data_world_size)
+    for i in range(pp_size):  # 对每个stage都需要进行sharding并行的通信组获取
         ranks = range(i * seq_data_world_size, (i + 1) * seq_data_world_size)
         ranks = index_ranks(ranks, world_ranks)
         group = CommGroup(ranks)
@@ -316,8 +318,8 @@ def gen_seq_data_group_dist(pp_size, to_print, world_ranks=None):
 
 
 def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, show_rank=-1, world_ranks=None):
-    world_ranks = sort_ranks(world_ranks)
-    world_size = get_world_size(world_ranks)
+    world_ranks = sort_ranks(world_ranks)  # 在runtime中的调用 world_ranks没有赋值
+    world_size = get_world_size(world_ranks) # 故而在runtime中, world_ranks=None, world_size=torch.distributed.get_world_size()。然后在后续函数中，world_ranks会因为被函数调用从而变为
     world_size_per_stage = world_size // pp_size
     for i in range(len(all_tp_sizes)):
         assert (
@@ -333,6 +335,8 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
     allgather_groups, split_groups = [None], [None]
     fused_split_groups, fused_allgather_groups = [None], [None]
     pp_group, all_pp_groups = gen_pp_group_dist(pp_size, to_print=False, world_ranks=world_ranks)
+    # print("[graduation] print all_pp_groups")
+    # show_groups(all_pp_groups)
     embedding_group = gen_embedding_group_dist(pp_size, all_pp_groups, to_print=False)
     tp_group_dict, dp_group_dict, sp_group_dict = {}, {}, {}
     for consec in [0, 1]:
@@ -372,6 +376,8 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
 
     seq_data_group = gen_seq_data_group_dist(pp_size, to_print=True, world_ranks=world_ranks)
     seq_data_groups = [seq_data_group if all_tp_sizes[i] == 1 else dp_groups[i] for i in range(len(all_tp_sizes))]
+    print(f'[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[{torch.distributed.get_rank()}], the seq_data_group is')
+    show_groups(seq_data_groups)
     show_rank = 0
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print("====================== Galvatron Communication Group ===========================")

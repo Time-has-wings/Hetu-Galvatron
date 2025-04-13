@@ -163,13 +163,16 @@ def construct_hybrid_parallel_model_api(
     load_module_func=None,
 ):
     if wrap_checkpoint_block_name == None:
+        print('[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:165) wrap_checkpoint_block_name is None')
         wrap_checkpoint_block_name = wrap_block_name
+        
     config, args, hp_configs = model_config, training_args, hybrid_parallel_configs
 
     if args.mixed_precision == "bf16":
         assert version_major > 1 and version_minor > 0, "Mixed precision training is only supported for torch > 2.0.1"
         fsdp._runtime_utils._register_post_backward_hook = _register_post_backward_hook_bf16
         fsdp._runtime_utils._finalize_params = _finalize_params_bf16
+        
     # Get model-specific model info: module_types, layernum_list, layer_shapes_list, layer_dtypes_list
     model_info = model_info(config, args)
     module_types = model_info.module_types()
@@ -185,6 +188,9 @@ def construct_hybrid_parallel_model_api(
         module_types, layernum_list, layer_shapes_list, layer_dtypes_list
     )
 
+    # print(f'[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : {shapes_whole}')
+    # print(f'[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : {dtypes_whole}')
+    
     # Get hp_configs_whole for the whole model (including embed/cls/... layers)
     hp_configs_whole = hp_config_whole_model(
         module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp=args.vocab_tp, vocab_sp=args.vocab_sp
@@ -218,6 +224,7 @@ def construct_hybrid_parallel_model_api(
 
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
     if args.initialize_on_meta and args.shape_order == "SBH":
+        # print("[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:221) tp function use the first path")
         with init_empty_weights(True):
             model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
     elif args.shape_order == "SBH":
@@ -225,8 +232,10 @@ def construct_hybrid_parallel_model_api(
     else:
         assert not args.use_ulysses, "FA model does not support ulysses!"
         model = construct_tensor_parallel_model(model, config, tp_groups_whole)
+        
     # [Step 2] Construct Sequantial model using model-specific sequential function
     if args.initialize_on_meta and args.shape_order == "SBH":
+        # print("[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:229) sequential function use the first path")
         with init_empty_weights(True):
             model = construct_sequential_model(model, config)
     else:
@@ -238,6 +247,7 @@ def construct_hybrid_parallel_model_api(
     )
     ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
     assert len(ln_offset) == len(dp_groups_whole)
+    
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.runtime.pipeline import PipelineParallel
 
@@ -260,7 +270,7 @@ def construct_hybrid_parallel_model_api(
     # [Step 5] Wrap Data Parallel modules based on dp_types & dp_groups
     hp_model.wrap_pipeline_modules_data_parallel(
         hp_configs_whole["dp_types_whole"],
-        seq_data_groups_whole,
+        seq_data_groups_whole,  # [note] 这是sharded data parallel的group
         module_types=module_types,
         mixed_precision=mixed_precision_dtype(args.mixed_precision),
         wrap_block_name=wrap_block_name,

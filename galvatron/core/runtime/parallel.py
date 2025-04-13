@@ -53,8 +53,10 @@ def wrap_data_parallel(
     load_module_func=None,
 ):
     if dp_type is None:
+        print("[graduation] (galvatron.core.runtime.parallel.py) (func wrap_data_parallel) because dp_type is none, early return")
         return module
     else:
+        # print("[graduation] (galvatron.core.runtime.parallel.py) (func wrap_data_parallel) dp_type : ", dp_type)
         assert pp_device is not None
         from galvatron.core import get_args
 
@@ -103,6 +105,10 @@ def wrap_module_fsdp_manually(
     all_block_name=None,
     load_module_func=None,
 ):
+    # print("[graduation] (galvatron/core/runtime/parallel.py) (func wrap_module_fsdp_manually) dp_group : ", dp_group)
+    # print("[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) : ", type(dp_group))
+    # [note] dp_group is not None and type(dp_group) is CommGroup in galvatron.core.runtime.py
+    # [note] and when pure tp or pure pp, dp_group.group actually is [global_rank], which only contains one rank, namely the current rank
     comm_group = None if dp_group is None else dp_group.group
     sharding_strategy = {
         "ddp": ShardingStrategy.NO_SHARD,
@@ -110,7 +116,8 @@ def wrap_module_fsdp_manually(
         "zero3": ShardingStrategy.FULL_SHARD,
     }[fsdp_type]
     from galvatron.core import get_args
-
+    # print('[graduation] sharding_strategy 119 is : ', sharding_strategy)
+    # print(f"[graduation] model type is {module_type}")
     args = get_args()
 
     mixed_precision_policy = MixedPrecision(
@@ -138,6 +145,7 @@ def wrap_module_fsdp_manually(
     )
     # Wrap given block
     if wrap_block_name is not None:
+        # print("[graduation] (galvatron/core/runtime/parallel.py) (func wrap_module_fsdp_manually) wrap_block_name : ", wrap_block_name)
         if "enc" in module_type or "dec" in module_type:
             module = apply_fsdp(module, fsdp_args, wrap_block_name)
         else:
@@ -310,7 +318,7 @@ def wrap_modules_data_parallel(
 ):
     assert len(module_list) == len(dp_types)
     assert len(module_list) == len(dp_groups)
-
+    # print(f"[graduation] dp_types is {dp_types}")
     process_group = default_process_group if default_process_group is not None else dp_groups[0]
     from galvatron.core import get_args
 
@@ -350,6 +358,7 @@ def wrap_modules_data_parallel(
         cast_root_forward_inputs=True,
     )
     backward_prefetch = None if pp_on else BackwardPrefetch.BACKWARD_PRE
+    # print('[graduation] sharding_strategy is 360: ', sharding_strategy)
     fsdp_args = dict(
         process_group=process_group.group,
         sharding_strategy=sharding_strategy,
@@ -391,6 +400,7 @@ def wrap_model_data_parallel(
         cast_root_forward_inputs=True,
     )
     backward_prefetch = BackwardPrefetch.BACKWARD_PRE if backward_prefetch else None
+    # print('[graduation] sharding_strategy 402 is : ', sharding_strategy)
     fsdp_args = dict(
         process_group=comm_group,
         sharding_strategy=sharding_strategy,

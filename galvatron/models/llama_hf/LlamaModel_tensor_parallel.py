@@ -47,6 +47,7 @@ class LlamaAttention_tp(nn.Module):
         input_tensor = hidden_states
         hidden_states = self.LayerNorm(hidden_states)
         if self.sequence_parallel:
+            # print("[graduation] use sequence_parallel")
             if self.use_ulysses:
                 rotary_pos_emb = self.rotary_pos_emb(
                     hidden_states.shape[0], offset=hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group)
@@ -56,6 +57,7 @@ class LlamaAttention_tp(nn.Module):
                     hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group)
                 )
         else:
+            print("[graduation] not use sequence_parallel")
             rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0])
         hidden_states, bias = self.attention(hidden_states, attention_mask, rotary_pos_emb=rotary_pos_emb)
         hidden_states = hidden_states + input_tensor
@@ -66,6 +68,7 @@ class LlamaMLP_tp(nn.Module):
     def __init__(self, config, tp_group=None):
         super().__init__()
         megatron_config = core_transformer_config_from_args(get_args())
+        # print(f'[graduation] (galvatron/models/llama_hf/LlamaModel_tensor_parallel.py:66) megatron_config : {megatron_config}')
         self.tp_group = tp_group.group if tp_group is not None else None
         self.mlp = ParallelMLP(megatron_config, tp_group=self.tp_group)
         self.LayerNorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)

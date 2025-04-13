@@ -24,8 +24,6 @@ def train(args):
     config = get_llama_config(args)
     model = llama_model_hp(config, args)
 
-    # exit(0)
-
     if local_rank == 0:
         print("Creating Dataset...")
 

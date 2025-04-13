@@ -71,13 +71,19 @@ class RotaryEmbedding(nn.Module):
         self.rotary_interleaved = rotary_interleaved
 
         self.seq_len_interpolation_factor = seq_len_interpolation_factor
-        self.inv_freq = 1.0 / (
-            rotary_base
-            ** (
-                torch.arange(0, dim, 2, dtype=torch.float32, device=torch.cuda.current_device())
-                / dim
-            )
-        )
+
+        rubbish_dev = torch.cuda.current_device()
+        rubbish_tensor = torch.arange(0, dim, 2, dtype=torch.float32)
+        rubbish = rubbish_tensor.to(f'cuda:{rubbish_dev}')
+        self.inv_freq = 1.0 / (rotary_base ** rubbish / dim)
+
+        # self.inv_freq = 1.0 / (
+        #     rotary_base
+        #     ** (
+        #         torch.arange(0, dim, 2, dtype=torch.float32, device=torch.cuda.current_device())
+        #         / dim
+        #     )
+        # )
 
     def forward(self, max_seq_len: int, offset: int = 0) -> Tensor:
         """Forward pass of RoPE embedding.

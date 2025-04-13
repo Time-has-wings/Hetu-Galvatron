@@ -1,0 +1,748 @@
+using world size: 8, data-parallel size: 8, context-parallel size: 1 tensor-model-parallel size: 1, pipeline-model-parallel size: 1 
+setting global batch size to 8
+WARNING: Setting args.overlap_p2p_comm to False since non-interleaved schedule does not support overlapping p2p communication
+using torch.float32 for parameters ...
+setting number of micro-batches to constant 1
+> initializing torch distributed ...
+> initialized tensor model parallel with size 1
+> initialized pipeline model parallel with size 1
+> setting random seeds to 1234 ...
+LlamaConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "eos_token_id": 2,
+  "head_dim": 128,
+  "hidden_act": "silu",
+  "hidden_size": 4096,
+  "initializer_range": 0.02,
+  "intermediate_size": 11008,
+  "max_position_embeddings": 1024,
+  "mlp_bias": false,
+  "model_name": "llama-7b",
+  "model_type": "llama",
+  "num_attention_heads": 32,
+  "num_hidden_layers": 32,
+  "num_key_value_heads": 32,
+  "pretraining_tp": 1,
+  "rms_norm_eps": 1e-06,
+  "rope_scaling": null,
+  "rope_theta": 10000.0,
+  "tie_word_embeddings": false,
+  "transformers_version": "4.50.3",
+  "use_cache": false,
+  "vocab_size": 32000
+}
+
+======================== Galvatron Parallel Config =============================
+Galvatron parallel config mode: [GLOBAL config mode]
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[GLOBAL config mode] Loaded global hybrid parallel strategy:
+   global_batch_size: 4, chunks: 1
+   pp_deg: 1, tp_deg: 8, dp_deg: 1, tp_consecutive_flag: 1, checkpoint_flag: 0
+   pipeline_type: pipedream_flush, default_dp_type: zero2, dtype: bf16
+   pp_division:                  [32]
+   pp_ranks:                     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   use_sp:                       [False]
+================================================================================
+Creating Model...
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]
+Model Layer Types:
+['embed', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'gpt_dec', 'norm', 'cls']
+   tp_sizes_whole:               [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8]
+   sp_sizes_whole:               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+   tp_consec_whole:              [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+   dp_types_whole:               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   pp_ranks_whole:               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   checkpoint_flags_whole:       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+   dp_sizes_whole:               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+================================================================================
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[0], the seq_data_group is
+[0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] 
+====================== Galvatron Communication Group ===========================
+Embedding group for rank 0:
+[0] 
+TP groups for rank 0 (all layers):
+[0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] 
+SP groups for rank 0 (all layers):
+[0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] 
+DP groups for rank 0 (all layers):
+[0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] 
+SDP groups for rank 0 (all layers):
+[0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None][0]
+ [0] [0] [graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None][0]
+ [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] [0] 
+Split groups for rank 0:
+None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None 
+AllGather groups for rank 0:
+None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None 
+Fused split groups for rank 0:
+None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None None 
+Fused allgather groups for rank 0:
+None None None None None None None None [graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]None
+ None None [graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]None
+ None None None None None None None None None None None None None None None None None None None None None None None 
+================================================================================
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[7], the seq_data_group is
+[7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] [7] 
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[1], the seq_data_group is
+[1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] [1] 
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[2], the seq_data_group is
+[2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] [2] 
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[4], the seq_data_group is
+[4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] [4] 
+[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global
+[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[6], the seq_data_group is
+[6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] [6] 
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[5], the seq_data_group is
+[5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] [5] 
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:195) shapes_whole : [None, [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], [[1024, -1, 4096]], None, None]
+[graduation] (galvatron/core/runtime/hybrid_parallel_model.py:196) dtypes_whole : [None, [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], [torch.bfloat16], None, None]
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron/core/runtime/comm_groups.py:195) rank[3], the seq_data_group is
+[3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] [3] 
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+[graduation] (galvatron.core/runtime/parallel.py) (func wrap_module_fsdp_manually) type(dp_group) :  <class 'galvatron.core.runtime.comm_groups.CommGroup'>
+Creating Dataset...
+------------------------ arguments ------------------------
+  adam_beta1 ...................................... 0.9
+  adam_beta2 ...................................... 0.999
+  adam_eps ........................................ 1e-08
+  adam_weight_decay ............................... 0.01
+  add_bias_linear ................................. False
+  add_position_embedding .......................... True
+  add_qkv_bias .................................... False
+  adlr_autoresume ................................. False
+  adlr_autoresume_interval ........................ 1000
+  allow_tf32 ...................................... 1
+  apply_layernorm_1p .............................. False
+  apply_query_key_layer_scaling ................... False
+  apply_residual_connection_post_layernorm ........ False
+  apply_rope_fusion ............................... True
+  async_grad_reduce ............................... True
+  async_tensor_model_parallel_allreduce ........... False
+  attention_dropout ............................... 0.0
+  auto_detect_ckpt_format ......................... False
+  barrier_with_L1_time ............................ True
+  bert_binary_head ................................ True
+  bert_embedder_type .............................. megatron
+  bert_load ....................................... None
+  bias_dropout_fusion ............................. True
+  bias_swiglu_fusion .............................. True
+  biencoder_projection_dim ........................ 0
+  biencoder_shared_query_context_model ............ False
+  block_data_path ................................. None
+  check_for_nan_in_loss_and_grad .................. True
+  check_loss ...................................... 0
+  chunks .......................................... 1
+  ckpt_fully_parallel_save ........................ False
+  ckpt_step ....................................... None
+  classes_fraction ................................ 1.0
+  clip_grad ....................................... 1.0
+  clone_scatter_output_in_embedding ............... True
+  consumed_train_samples .......................... 0
+  consumed_valid_samples .......................... 0
+  context_parallel_size ........................... 1
+  create_attention_mask_in_dataloader ............. True
+  data_cache_path ................................. None
+  data_parallel_random_init ....................... False
+  data_path ....................................... None
+  data_per_class_fraction ......................... 1.0
+  data_sharding ................................... True
+  dataloader_type ................................. single
+  decoder_num_layers .............................. None
+  decoder_seq_length .............................. None
+  decoupled_lr .................................... None
+  decoupled_min_lr ................................ None
+  default_dp_type ................................. zero2
+  delay_grad_reduce ............................... True
+  delay_param_gather .............................. False
+  dino_bottleneck_size ............................ 256
+  dino_freeze_last_layer .......................... 1
+  dino_head_hidden_size ........................... 2048
+  dino_local_crops_number ......................... 10
+  dino_local_img_size ............................. 96
+  dino_norm_last_layer ............................ False
+  dino_teacher_temp ............................... 0.07
+  dino_warmup_teacher_temp ........................ 0.04
+  dino_warmup_teacher_temp_epochs ................. 30
+  dist_ckpt_format ................................ torch_dist
+  distribute_saved_activations .................... False
+  distributed_backend ............................. nccl
+  distributed_checkpoint .......................... False
+  distributed_timeout_minutes ..................... 10
+  embed_sdp ....................................... 0
+  embedding_path .................................. None
+  empty_unused_memory_level ....................... 0
+  enable_one_logger ............................... False
+  end_weight_decay ................................ 0.01
+  entropy_in_fp32 ................................. False
+  eod_mask_loss ................................... False
+  epochs .......................................... 10
+  eval_interval ................................... 1000
+  eval_iters ...................................... 100
+  evidence_data_path .............................. None
+  exit_after_profiling ............................ 1
+  exit_duration_in_mins ........................... None
+  exit_interval ................................... None
+  exit_on_missing_checkpoint ...................... False
+  exit_signal_handler ............................. False
+  expert_model_parallel_size ...................... 1
+  ffn_hidden_size ................................. 11008
+  finetune ........................................ False
+  fp16 ............................................ False
+  fp16_lm_cross_entropy ........................... False
+  fp32_residual_connection ........................ False
+  fp8 ............................................. None
+  fp8_amax_compute_algo ........................... most_recent
+  fp8_amax_history_len ............................ 1
+  fp8_interval .................................... 1
+  fp8_margin ...................................... 0
+  fp8_wgrad ....................................... True
+  galvatron_config_path ........................... None
+  global_batch_size ............................... 8
+  global_checkpoint ............................... 0
+  global_tp_consec ................................ 1
+  global_tp_deg ................................... 8
+  global_train_batch_size ......................... 4
+  gradient_accumulation_fusion .................... False
+  group_query_attention ........................... False
+  head_lr_mult .................................... 1.0
+  hidden_dropout .................................. 0.0
+  hidden_size ..................................... 4096
+  hysteresis ...................................... 2
+  ict_head_size ................................... None
+  ict_load ........................................ None
+  img_h ........................................... 224
+  img_w ........................................... 224
+  indexer_batch_size .............................. 128
+  indexer_log_interval ............................ 1000
+  inference_batch_times_seqlen_threshold .......... 512
+  init_method_xavier_uniform ...................... False
+  initialize_on_meta .............................. 1
+  iter_per_epoch .................................. 1250
+  kv_channels ..................................... 128
+  lazy_mpu_init ................................... None
+  load ............................................ None
+  load_iteration .................................. 0
+  load_params ..................................... 0
+  local_rank ...................................... 0
+  log_batch_size_to_tensorboard ................... False
+  log_interval .................................... 100
+  log_learning_rate_to_tensorboard ................ True
+  log_loss_scale_to_tensorboard ................... True
+  log_memory_to_tensorboard ....................... False
+  log_num_zeros_in_grad ........................... False
+  log_params_norm ................................. False
+  log_progress .................................... False
+  log_throughput .................................. False
+  log_timers_to_tensorboard ....................... False
+  log_validation_ppl_to_tensorboard ............... False
+  log_world_size_to_tensorboard ................... False
+  loss_scale ...................................... None
+  loss_scale_window ............................... 1000
+  lr .............................................. 0.0001
+  lr_decay_iters .................................. None
+  lr_decay_samples ................................ None
+  lr_warmup_init .................................. 0.0
+  lr_warmup_iters ................................. 0
+  lr_warmup_samples ............................... 0
+  make_vocab_size_divisible_by .................... 128
+  manual_gc ....................................... False
+  manual_gc_eval .................................. True
+  manual_gc_interval .............................. 0
+  mask_factor ..................................... 1.0
+  mask_prob ....................................... 0.15
+  mask_type ....................................... random
+  max_predictions_per_seq ......................... 20
+  max_tokens_to_oom ............................... 12000
+  merge_file ...................................... None
+  micro_batch_size ................................ 1
+  min_loss_scale .................................. 1.0
+  mixed_precision ................................. bf16
+  mmap_bin_files .................................. True
+  mock_data ....................................... False
+  model_size ...................................... llama-7b
+  moe_aux_loss_coeff .............................. 0.0
+  moe_grouped_gemm ................................ False
+  moe_input_jitter_eps ............................ None
+  moe_per_layer_logging ........................... False
+  moe_router_load_balancing_type .................. aux_loss
+  moe_router_topk ................................. 2
+  moe_token_dispatcher_type ....................... allgather
+  moe_token_dropping .............................. False
+  moe_z_loss_coeff ................................ None
+  nccl_communicator_config_path ................... None
+  no_persist_layer_norm ........................... False
+  no_save_optim ................................... None
+  no_save_rng ..................................... None
+  norm_epsilon .................................... 1e-06
+  normalization ................................... LayerNorm
+  num_attention_heads ............................. 32
+  num_channels .................................... 3
+  num_classes ..................................... 1000
+  num_experts ..................................... None
+  num_hidden_layers ............................... 32
+  num_layers_per_virtual_pipeline_stage ........... None
+  num_query_groups ................................ 1
+  num_workers ..................................... 2
+  one_logger_entity ............................... hwinf_dcm
+  one_logger_project .............................. e2e-tracking
+  one_logger_run_name ............................. None
+  onnx_safe ....................................... None
+  openai_gelu ..................................... False
+  optimizer ....................................... adam
+  output_bert_embeddings .......................... False
+  overlap_grad_reduce ............................. False
+  overlap_p2p_comm ................................ False
+  overlap_param_gather ............................ False
+  override_opt_param_scheduler .................... False
+  padded_vocab_size ............................... 32000
+  patch_dim ....................................... 16
+  perform_initialization .......................... True
+  pipeline_model_parallel_split_rank .............. None
+  pipeline_type ................................... pipedream_flush
+  pp_deg .......................................... 1
+  pretrained_checkpoint ........................... None
+  profile ......................................... 1
+  profile_forward ................................. 0
+  profile_mode .................................... static
+  profile_ranks ................................... [0]
+  profile_step_end ................................ 12
+  profile_step_start .............................. 10
+  profile_type .................................... allocated
+  qk_layernorm .................................... False
+  query_in_block_prob ............................. 0.1
+  rampup_batch_size ............................... None
+  rank ............................................ 0
+  reduce_in_fp32 .................................. False
+  reset_attention_mask ............................ False
+  reset_position_ids .............................. False
+  retriever_report_topk_accuracies ................ []
+  retriever_score_scaling ......................... False
+  retriever_seq_length ............................ 256
+  retro_add_retriever ............................. False
+  retro_attention_gate ............................ 1
+  retro_cyclic_train_iters ........................ None
+  retro_encoder_attention_dropout ................. 0.1
+  retro_encoder_hidden_dropout .................... 0.1
+  retro_encoder_layers ............................ 2
+  retro_num_neighbors ............................. 2
+  retro_num_retrieved_chunks ...................... 2
+  retro_project_dir ............................... None
+  retro_verify_neighbor_count ..................... True
+  rotary_interleaved .............................. False
+  rotary_percent .................................. 1.0
+  rotary_seq_len_interpolation_factor ............. None
+  sample_rate ..................................... 1.0
+  save_profiled_memory ............................ 0
+  scatter_gather_tensors_in_pipeline .............. True
+  sdp ............................................. 0
+  seed ............................................ 1234
+  seq_length ...................................... 1024
+  sequence_parallel ............................... False
+  set_layernum_manually ........................... 0
+  set_model_config_manually ....................... 1
+  set_seqlen_manually ............................. 0
+  sgd_momentum .................................... 0.9
+  shape_order ..................................... SBH
+  short_seq_prob .................................. 0.1
+  skip_train ...................................... False
+  spec ............................................ None
+  split ........................................... 969, 30, 1
+  squared_relu .................................... False
+  standalone_embedding_stage ...................... False
+  start_weight_decay .............................. 0.01
+  swiglu .......................................... True
+  swin_backbone_type .............................. tiny
+  tensorboard_dir ................................. None
+  tensorboard_log_interval ........................ 1
+  tensorboard_queue_size .......................... 1000
+  test_data_path .................................. None
+  test_mode ....................................... False
+  timing_log_level ................................ 0
+  timing_log_option ............................... minmax
+  titles_data_path ................................ None
+  tokenizer_model ................................. None
+  tokenizer_type .................................. None
+  tp_comm_bulk_dgrad .............................. True
+  tp_comm_bulk_wgrad .............................. True
+  tp_comm_overlap ................................. False
+  tp_comm_overlap_ag .............................. True
+  tp_comm_overlap_cfg ............................. None
+  tp_comm_overlap_rs .............................. True
+  tp_comm_split_ag ................................ True
+  tp_comm_split_rs ................................ True
+  train_data_path ................................. None
+  train_iters ..................................... 25
+  train_samples ................................... None
+  transformer_impl ................................ transformer_engine
+  untie_embeddings_and_output_weights ............. False
+  use_checkpoint_args ............................. False
+  use_checkpoint_opt_param_scheduler .............. False
+  use_dist_ckpt ................................... False
+  use_distributed_optimizer ....................... False
+  use_flash_attn .................................. True
+  use_mcore_models ................................ False
+  use_one_sent_docs ............................... False
+  use_ring_exchange_p2p ........................... False
+  use_rotary_position_embeddings .................. False
+  use_ulysses ..................................... False
+  valid_data_path ................................. None
+  variable_seq_lengths ............................ False
+  virtual_pipeline_model_parallel_size ............ None
+  vision_backbone_type ............................ vit
+  vision_pretraining .............................. False
+  vision_pretraining_type ......................... classify
+  vocab_extra_ids ................................. 0
+  vocab_file ...................................... None
+  vocab_size ...................................... 32000
+  vocab_sp ........................................ 0
+  vocab_tp ........................................ 8
+  wandb_exp_name .................................. 
+  wandb_project ................................... 
+  wandb_save_dir .................................. 
+  weight_decay .................................... 0.01
+  weight_decay_incr_style ......................... constant
+  world_size ...................................... 8
+  yaml_cfg ........................................ None
+-------------------- end of arguments ---------------------
+Start training...
+[rank 0]  iter 0, iter_time: 6.81554736328125
+[rank 0]  iter 1, iter_time: 0.6909215698242187
+[rank 0]  iter 2, iter_time: 0.5171292114257813
+[rank 0]  iter 3, iter_time: 0.2653953857421875
+[rank 0]  iter 4, iter_time: 0.5200253295898437
+[rank 0]  iter 5, iter_time: 0.26467681884765626
+[rank 0]  iter 6, iter_time: 0.4035482177734375
+[rank 0]  iter 7, iter_time: 0.26626373291015626
+[rank 0]  iter 8, iter_time: 0.2626632080078125
+[rank 0]  iter 9, iter_time: 0.31550308227539064
+[rank 0]  iter 10, iter_time: 0.26686578369140623
+[rank 0]  iter 11, iter_time: 0.5967775268554687
+[rank 0]  iter 12, iter_time: 0.2654081726074219
+[rank 0]  iter 13, iter_time: 0.42067999267578127
+[rank 0]  iter 14, iter_time: 0.26676416015625
+[rank 0]  iter 15, iter_time: 0.264306884765625
+[rank 0]  iter 16, iter_time: 0.4887344970703125
+[rank 0]  iter 17, iter_time: 0.26807708740234376
+[rank 0]  iter 18, iter_time: 0.2645321044921875
+[rank 0]  iter 19, iter_time: 0.2639881896972656
+[rank 0]  iter 20, iter_time: 0.26358847045898437
+[rank 5] ealry stopping[rank 6] ealry stopping[rank 0] ealry stopping[rank 3] ealry stopping
+[rank 4] ealry stopping
+
+
+[rank 7] ealry stopping[rank 1] ealry stopping[rank 2] ealry stopping
+
+
+
+Epoch 1 [rank 5]summary: total time 6.4368, avg time 0.3388, min time 0.2619, max time 0.5967Epoch 1 [rank 0]summary: total time 6.4449, avg time 0.3392, min time 0.2627, max time 0.5968
+
+Epoch 1 [rank 6]summary: total time 6.4275, avg time 0.3383, min time 0.2617, max time 0.5972Training finished.
+
+Epoch 1 [rank 4]summary: total time 6.4310, avg time 0.3385, min time 0.2619, max time 0.5968
+Epoch 1 [rank 3]summary: total time 6.6222, avg time 0.3485, min time 0.2625, max time 0.5946
+Epoch 1 [rank 2]summary: total time 6.4284, avg time 0.3383, min time 0.2616, max time 0.5971
+Epoch 1 [rank 7]summary: total time 6.4414, avg time 0.3390, min time 0.2625, max time 0.5968Epoch 1 [rank 1]summary: total time 6.4290, avg time 0.3384, min time 0.2623, max time 0.5963
+

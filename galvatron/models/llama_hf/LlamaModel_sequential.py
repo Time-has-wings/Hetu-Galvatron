@@ -210,3 +210,4 @@ class LlamaModelInfo(ModelInfo):
         self.set_shapes(layer_shapes_list)
         self.set_dtypes(layer_dtypes_list)
         self.set_module_types(module_types)
+        # [note] 除了len(module_types) = 实际层数外, 其余的layernum_list, layershapes_list, layerdtype_list的length都是1

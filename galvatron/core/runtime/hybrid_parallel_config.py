@@ -25,6 +25,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         print("======================== Galvatron Parallel Config =============================")
         print("Galvatron parallel config mode: [%s config mode]" % config_type)
     if config_type == "GLOBAL":
+        print("[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global")
         pp_deg = args.pp_deg
         tp_sizes_enc = [args.global_tp_deg] * total_layer_num if args.global_tp_deg > 0 else [1] * total_layer_num
         tp_consecutive_flags = (
@@ -34,9 +35,11 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         checkpoint_flags_enc = [args.global_checkpoint] * total_layer_num
         pp_divide = None
         if args.use_ulysses:
+            print("[graduation] (galvatron.core.runtime.hybrid_parallel_config.py) config_type is global and use_ulysses is true")
             args.vocab_sp = 1
             use_sp = [1] * total_layer_num
         else:
+            print("[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) config_type is global and use_ulysses is false")
             args.vocab_sp = 0
             use_sp = [0] * total_layer_num
     else:
@@ -90,7 +93,8 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     min_tp = min(min(tp_sizes_enc), args.vocab_tp)
     assert (
         args.global_train_batch_size % (world_size // pp_deg // min_tp) == 0
-    ), "global_train_batch_size should be multiple of world_size//pp_deg!"
+    ), "global_train_batch_size should be multiple of world_size // pp_deg!"
+    
     hybrid_parallel_configs = {
         "pp_deg": pp_deg,
         "tp_sizes_enc": tp_sizes_enc,
@@ -107,6 +111,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     }
 
     if args.distributed_checkpoint:
+        print("[graduation] (galvatron.core.runtime/hybrid_parallel_config.py) checkpoint is distributed")
         json_path = os.path.join(args.load, f"hybrid_parallel_configs.json")
         checkponit_hybrid_parallel_configs = json.load(open(json_path, "r"))
         assert (

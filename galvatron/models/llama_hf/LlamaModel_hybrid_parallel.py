@@ -1,3 +1,4 @@
+import torch.distributed
 from transformers import LlamaForCausalLM
 
 from galvatron.core import (
@@ -54,6 +55,8 @@ def get_llama_config(args, overwrite_args=True):
     config = set_model_config(config, args, overwrite_args)
     if hasattr(args, "local_rank") and args.local_rank == 0:
         print(config)
+    # print(f'[graduation] (galvatron/models/llama_hf/LlamaModel_hybrid_parallel.py:42) config : {config}')
+    # print(f'[graduation] (galvatron/models/llama_hf/LlamaModel_hybrid_parallel.py) args : {args}')
     return config
 
 
@@ -68,16 +71,18 @@ def llama_model_hp(config, args):
     else:
         llama_model = LlamaForCausalLM(config)
 
-    param_num = sum(p.numel() for p in llama_model.parameters())
-    # print(f'[guangming] model: {llama_model}, param_num = {param_num}')
-
     model = construct_hybrid_parallel_model(
         model=llama_model, model_config=config, training_args=args, hybrid_parallel_configs=hybrid_parallel_configs
     )
     
-    param_num = sum(p.numel() for p in llama_model.parameters())
-    # print(f'[guangming] model: {model}, param_num = {param_num}')
-    
+    if torch.distributed.get_rank() == 0:
+        print("[graduation] (galvatron/models/llama_hf/LlamaModel_hybrid_parallel.py) model : ", model)
+        prama_num = sum(p.numel() for p in model.parameters())
+        print(f"[graduation] (galvatron/models/llama_hf/LlamaModel_hybrid_parallel.py) model param num : {prama_num}")
+        for p in model.parameters():
+            dtype = p.dtype
+            print(f"[graduation] (galvatron/models/llama_hf/LlamaModel_hybrid_parallel.py) model param dtype : {dtype}")
+        
     return model
 
 

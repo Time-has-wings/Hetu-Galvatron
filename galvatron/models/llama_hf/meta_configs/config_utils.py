@@ -64,6 +64,10 @@ def set_model_config(config, args, overwrite_args=True):
         if args.set_seqlen_manually:
             config.max_position_embeddings = args.seq_length
 
+    # dummy set
+    if args.global_tp_deg != 1:
+        config.intermediate_size = 11008  # [note] 临时修改
+
     # ======= Model Config --> Arguments ======
     overwrite_model_args(config, args)
     # This step is necessary that maintains the consistency of model config and arguments.
