@@ -73,9 +73,9 @@ def galvatron_search_args(parser):
     group.add_argument(
         "--default_dp_type", type=str, default="ddp", help="Default data parallel type", choices=["ddp","zero2"],
     )
-    # group.add_argument(
-    #     "--embed_sdp", type=int, default=0, help="Apply SDP (zero-3) for Embeddings and cls", choices=[0, 1],
-    # )
+    group.add_argument(
+        "--embed_sdp", type=int, default=0, help="Apply SDP (zero-3) for Embeddings and cls", choices=[0, 1],
+    )
     group.add_argument(
         "--mixed_precision", type=str, default="bf16", help="Mixed precision option.", choices=["fp32", "fp16", "bf16"],
     )

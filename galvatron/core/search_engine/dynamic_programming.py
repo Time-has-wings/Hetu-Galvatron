@@ -13,7 +13,7 @@ class DPAlg():
         self.other_mem_cost = other_mem_cost
         self.other_time_cost = other_time_cost
 
-        self._f = np.full((self.max_mem, strategy_num), 0, dtype=np.float64)
+        self._f = np.full((self.max_mem, strategy_num), 0, dtype=np.float64) # max_mem作为维度，说明这是一个整数，所以其实在动态规划的时候  用的显存就是一个整数，其实在DpOnModel中就有显现
         
         self.v_data = None
         self.inter_cost = None
@@ -60,18 +60,19 @@ class DPAlg():
         #     return np.inf, None, -1, -1
         # print(self.other_mem_cost, self.other_time_cost)
         if not self.fine_grained_mode:
-            res_list = {k:np.full((self.layer_num), -1, dtype=np.int32) for k,v in self.other_mem_cost.items()}
+            # for k, v in self.other_mem_cost.items()中k其实就是tp的所有值
+            res_list = {k:np.full((self.layer_num), -1, dtype=np.int32) for k,v in self.other_mem_cost.items()} # 初始化为-1
             total_cost = {k:np.inf for k,v in self.other_mem_cost.items()}
             remaining_mem = {k:-1 for k,v in self.other_mem_cost.items()}
-            for k,v in self.other_mem_cost.items():
+            for k,v in self.other_mem_cost.items(): # 求解出所有的tp
                 for i in range(self.strategy_num):
-                    if self.strategy_set[i][1]==k:
-                        time_cost = sum(self.intra_cost[:,i]) + sum(self.inter_cost[:,i,i]) + self.other_time_cost[k]
+                    if self.strategy_set[i][1]==k: # 只有当  当前策略的tp值和tp相等时 才会进行计算
+                        time_cost = sum(self.intra_cost[:,i]) + sum(self.inter_cost[:,i,i]) + self.other_time_cost[k] # other_time_cost[k]是一个数
                         mem_cost = sum(self.v_data[:,i]) + self.other_mem_cost[k]
                         if self.max_mem - 1 - mem_cost >= 0 and total_cost[k] > time_cost:
                             remaining_mem[k] = self.max_mem - 1 - mem_cost
                             total_cost[k] = time_cost
-                            res_list[k] = np.full((self.layer_num), i, dtype=np.int32)
+                            res_list[k] = np.full((self.layer_num), i, dtype=np.int32) # res_list[k是一个一维数组，其shape为(layer_num,)，每个值表示选择策略的idx
             return total_cost, res_list, remaining_mem       
         if self.use_cpp_core:
             import galvatron_dp_core
@@ -93,6 +94,7 @@ class DPAlg():
 
             return total_cost, res_list, remaining_mem
 
+        # 以下是dp算法的核心
         for i in range(self.layer_num):
             for v in range(self.max_mem - 1, -1, -1):
                 for s in range(self.strategy_num):
@@ -123,7 +125,7 @@ class DPAlg():
             next_index, next_v = self._mark[i, next_v, next_index], next_v - self.v_data[i, next_index]
             res_list[i - 1] = next_index
 
-        return total_cost, res_list, next_v - self.v_data[0, next_index]
+        return total_cost, res_list, next_v - self.v_data[0, next_index]  # res_list是一个list，表示每一层选择的策略的idx，total_cost表示消耗的时间，最后的一个返回值是剩余的显存
 
 class DpOnModel:
     def __init__(   self, 
@@ -221,14 +223,16 @@ class DpOnModel:
 
         if self.model_microbatch_after_dp:
             dp_size = self.gpu_num // pp_deg
+            # bsz * min_tp // dp_size = bsz * min_tp * pp_deg // gpu_num = bsz // max_dp
+            #  其实这个函数就是为了计算一下 累积步数是多少（。。。） 我有点服了， 这个东西整那么麻烦
             chunks = [parallel_args.optimal_chunk_func(bsz * min_tp // dp_size, [pp_deg, min_tp, dp_size], mbsz, min_tp) for parallel_args in self.parallel_args_list]
         strategy_set = list(filter(lambda s: s[0] == pp_deg, self.strategies_set))
         strategy_num = len(strategy_set)
 
         intra_layer_cost_list = []
 
-        for i in range(len(self.layer_num)):
-            if self.model_microbatch_after_dp:
+        for i in range(len(self.layer_num)): # 算了 不需要去适配那种有多种层的模型 先不管 毕竟是用llama进行结项 不要自己给自己增加负担
+            if self.model_microbatch_after_dp: # 这个应该是说 在没有考虑pp之前，就没有这个概念，所以就没有除以chunk[i]
                 intra_layer_cost = [self.timecost_model(strategy, bsz/chunks[i],
                                                         model_args=self.model_args_list[i], train_args=self.train_args_list[i],
                                                         parallel_args=self.parallel_args_list[i], profile_model_args=self.profile_model_args_list[i],
@@ -238,14 +242,14 @@ class DpOnModel:
                                                         model_args=self.model_args_list[i], train_args=self.train_args_list[i],
                                                         parallel_args=self.parallel_args_list[i], profile_model_args=self.profile_model_args_list[i],
                                                         profile_hardware_args=self.profile_hardware_args_list[i], logger=self.logger).gen_result() for strategy in strategy_set]
-            intra_layer_cost = np.array(intra_layer_cost, dtype=np.float64).reshape(1, -1).repeat(self.layer_num[i], axis=0)
+            intra_layer_cost = np.array(intra_layer_cost, dtype=np.float64).reshape(1, -1).repeat(self.layer_num[i], axis=0)  # 注意这个layer_num是list
             intra_layer_cost_list.append(intra_layer_cost)
 
         intra_layer_cost = np.concatenate(intra_layer_cost_list, axis = 0)
         min_cost_strategy_ids = np.argmin(intra_layer_cost, axis=1)
 
         other_mem_cost = {}
-        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, vsp, embed_sdp, min_tp, max_tp, self.sequence_len, 
+        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, vsp, embed_sdp, min_tp, max_tp, self.sequence_len,  # 此处传递的mbsz是在min_tp下 除以了累积步数的微批次
                                             model_args=self.model_args_list[0],
                                             train_args=self.train_args_list[0],
                                             parallel_args=self.parallel_args_list[0],
@@ -282,26 +286,29 @@ class DpOnModel:
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
                     v = np.ceil(np.array(v)).astype(np.int32)
-                    v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0)
+                    v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0) # 此处repeat了layer_num[i]下，哪怕本layer根本就不在这个stage中
                     v_list.append(v)
                 v = np.concatenate(v_list, axis = 0)
                 v_list_stage_idx.append(v)
 
         # NEW VERSION: inter-layer timecost model
         # print(other_time_cost, other_mem_cost, v[0], strategy_set)
+        
         inter_layer_cost_list = []
         for idx in range(len(self.layer_num)):
             inter_layer_cost = np.zeros((strategy_num, strategy_num))
+            
+            # 这一步先算出通信量
             for i in range(strategy_num):
                 for j in range(strategy_num):
                     case1 = strategy_set[j][1] > strategy_set[i][1]
                     case2 = False
                     case3 = False
                     if 'tp' in strategy_set[j][-1].keys() and 'tp' in strategy_set[i][-1].keys():
-                        case2 = (strategy_set[j][1] == strategy_set[i][1] and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
+                        case2 = (strategy_set[j][1] == strategy_set[i][1] and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])  # 这是说 两者不是连续的 不存在这种情况
                         world_size = strategy_set[i][1] * strategy_set[i][2]
                         case3 = (world_size == 8 and strategy_set[i][1] == 4 and strategy_set[j][1] == 2 \
-                            and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
+                            and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp']) # 这是用来debug的把
                     sample_num = self.sequence_len[idx] * self.config.hidden_size * (4 if self.config.mixed_precision == "fp32" else 2)
                     case4 = self.config.sequence_parallel and strategy_set[j][1] != strategy_set[i][1]
                     if case1 or case2 or case3 or case4:
@@ -316,6 +323,7 @@ class DpOnModel:
                 #      activation = 2 * bsz / strategy_set[j][2]
                 #      inter_layer_cost[i, j] = (ratio - 1) * activation / ratio
 
+            # 这一步就计算出通信时间
             # find corresponding communication coefficient
             for i in range(strategy_num):
                 for j in range(strategy_num):
@@ -443,7 +451,7 @@ class DpOnModel:
                     res_list_list, mem_remain_list, mem_cost_list = None, [-1 for v2 in mem_remain_list], [-1 for v2 in mem_cost_list]
             return final_comm_cost, final_res_list_list, final_mem_remain_list, final_mem_cost_list, vtp, best_strategy_flag, from_history
         
-        for i in range(pp_deg):
+        for i in range(pp_deg): # 对每一个stage进行求解
             if self.config.sequence_parallel and self.config.global_memory_buffer and sp_search != 2:
                 global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * max(self.sequence_len) * 4 / 1024 / 1024
                 if self.config.mixed_precision:
@@ -464,13 +472,17 @@ class DpOnModel:
                                 intra_layer_cost[start_layer:start_layer+pp_stage_list[i]], 
                                 inter_layer_cost[start_layer:start_layer+pp_stage_list[i]])
             comm_cost, res_list, mem_remain = dp.fit()
+            
+            # 不是 mem_remain不是一个可以迭代的值把
+            # 这个地方还是没错，因为会调用c++代码的实现，它的返回值就是三个字典，表示在vocab分别是k时的解决
             for k,v in comm_cost.items():
                 if mem_remain[k] == -1:
                     res_list[k] = None
                 
+                # TODO 这个为什么是要是不是min_cost_strategy_ids来判断呢？？？
                 best_strategy_flag[k][i] = res_list[k] is not None and (np.array(res_list[k]) == min_cost_strategy_ids[start_layer:start_layer+pp_stage_list[i]]).all()
                 if res_list[k] is not None:
-                    res_list[k] = list(map(lambda x: strategy_set[x], res_list[k]))
+                    res_list[k] = list(map(lambda x: strategy_set[x], res_list[k])) # 这个lambda是会根据res_list[k]的每个索引去get到那个策略
                 mem_cost[k] = self.max_mem - mem_remain[k] if mem_remain[k] >= 0 else np.inf
                 
                 # if res_list[k] is not None:
@@ -486,25 +498,30 @@ class DpOnModel:
             mem_remain_list.append(mem_remain)
             mem_cost_list.append(mem_cost)
             start_layer += pp_stage_list[i]
+            
+            
         comm_cost = np.inf
         vtp = -1
         for k in other_time_cost[0].keys():
-            nw_res_list_list = [v2[k] for v2 in res_list_list]
-            nw_comm_cost_list = [v2[k] for v2 in comm_cost_list]
+            nw_res_list_list = [v2[k] for v2 in res_list_list] # 将每个阶段在vtp=k的时候的最佳选择拿出来
+            nw_comm_cost_list = [v2[k] for v2 in comm_cost_list] #  将每个阶段在vtp=k的时候的运行时间拿出来
             if self.model_microbatch_after_dp:
                 if None not in nw_res_list_list:
                     res_list = []
                     for res in nw_res_list_list:
                         res_list += res
-                    pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[1][k], self.logger)
+                    pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list, 
+                                                       res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[1][k], self.logger)
+                    # 传入的chunks是有多种layer时的累积步数，其实就是同一个值
                     # print(sum(comm_cost_list),pipeline_cost)
                     # print(pp_stage_list, res_list_list)
                     if comm_cost > pipeline_cost:
                         comm_cost = pipeline_cost
-                        vtp = k
+                        vtp = k # 抉择出最优的vtp
             else:
                 comm_cost = sum(nw_comm_cost_list)
-        if vtp != -1:
+        if vtp != -1:  # 如果最终抉择出的vtp不是-1，说明找到了最优策略
+            # 那就把这个vtp下对应的数据拿出来
             res_list_list = [v2[vtp] for v2 in res_list_list]
             mem_remain_list = [v2[vtp] for v2 in mem_remain_list]
             mem_cost_list = [v2[vtp] for v2 in mem_cost_list]
@@ -519,13 +536,15 @@ class DpOnModel:
         min_mem_remain = -1
         min_mem_cost = -1
         min_vtp = -1
+        
+        # mbsz_dict怎么会是none呢？
         if mbsz_dict == None:
             mbsz_dict = {}
             for pp_deg in self.ppdeg_set:
                 mbsz_dict[pp_deg] = 8
 
         for pp_deg in self.ppdeg_set:
-            if pp_deg * min_tp > self.gpu_num:
+            if pp_deg * min_tp > self.gpu_num: # 这压根就不会出现这个bug
                 continue
             if print_:
                 if self.logger is not None:
@@ -545,8 +564,9 @@ class DpOnModel:
                         print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
                 continue
             assert self.multi_layer_type
+            # 其实best_strategy_flag和from_history好像是没啥用的
             comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, embed_sdp, sp_search)
-            mem_cost = [m + self.mem_cache for m in mem_cost] if isinstance(mem_cost, list) else mem_cost + self.mem_cache
+            mem_cost = [m + self.mem_cache for m in mem_cost] if isinstance(mem_cost, list) else mem_cost + self.mem_cache # 这个地方的mem_cache写错了吧   哦   不对 这个地方没有写错 它又不是每个对这个list做求和
             if print_:
                 if self.logger is not None:
                     self.logger.info(f'Best strategy: {best_strategy_flag} \nFrom history: {from_history}')

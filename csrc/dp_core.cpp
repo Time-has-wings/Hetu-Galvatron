@@ -122,3 +122,5 @@ std::pair<std::map<int, double>, std::map<int, int> > dynamic_programming_core( 
 PYBIND11_MODULE(galvatron_dp_core, m) {
     m.def("dynamic_programming_core", &dynamic_programming_core, "A dynamic programming function");
 }
+
+// c++ -O3 -Wall -shared -std=c++11 -fPIC $(python3 -m pybind11 --includes) cpp/dp_core.cpp -o pybind_lib$(python3-config --extension-suffix)

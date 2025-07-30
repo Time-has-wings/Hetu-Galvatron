@@ -74,7 +74,7 @@ class MemoryCostModel:
         else:
             self.sdp_size = self.dp_size
     
-        # [adjust]:calculate chunks
+        # [adjust]:calculate chunks 这个是因为mbsz其实是在min_tp的时候的mbsz
         if args.chunks is None:
             args.chunks = args.optimal_chunk_func(args.global_batch_size // self.dp_size, args.strategy, args.mbsz, args.min_tp)
         max_chunks = args.global_batch_size // (self.tp_size * self.dp_size // args.min_tp)
@@ -272,6 +272,8 @@ class TimeCostModel:
         self.sp_space = args.sp_space
         self.fsdp = True if 'fsdp' in args.strategy[-1].keys() and args.strategy[-1]['fsdp'] else False
         self.checkpoint = True if 'cpt' in args.strategy[-1].keys() and args.strategy[-1]['cpt'] else False
+        
+        #  当tp维度是ulysees时，就初始化sp_dict为all2all的dict，当tp维度就是tensor parallel时，就初始化sp_dict为allreduce的dict
         if 'sp' in args.strategy[-1].keys() and args.strategy[-1]['sp'] == 1:
             self.sdp_size = self.tp_size * self.dp_size
             if self.tp_size == 1:
@@ -325,8 +327,10 @@ class TimeCostModel:
             
         # [calculate]:calculate dc
         if 'sp' in args.strategy[-1].keys() and args.strategy[-1]['sp'] == 1:
+            # 当使用sp时，由于sp的维度会参与到fsdp中，所以此处用self.sdp_size
             self.dc = args.comm_coe_dict['%d'%self.sdp_size] if '%d'%self.sdp_size in args.comm_coe_dict.keys() else args.comm_coe_dict['%d_1'%self.sdp_size]
         else:
+            # 当不适用sp时，fsdp的大小就是dp_size，然后还需要去check以下是不是连续的
             if self.tp_size == 1 or self.dp_size == 1:
                 self.dc = args.comm_coe_dict['%d'%self.dp_size] if '%d'%self.dp_size in args.comm_coe_dict.keys() else args.comm_coe_dict['%d_1'%self.dp_size]
             else:
@@ -344,7 +348,7 @@ class TimeCostModel:
     
     def estimate_tp_communication_cost(self):
         args = self.args
-        if self.sp_space == 'tp+sp':
+        if self.sp_space == 'tp+sp': # tp+sp 采用拟合的方式，所以只需要控制以下sp_dict是什么就好了
             # [calculate]:calculate tp comm time
             self.tp_comm_num = 4 * self.layer_num
             if self.checkpoint:
@@ -354,7 +358,7 @@ class TimeCostModel:
             if self.tp_size == 1:
                 per_tp_message_time = 0
             else:
-                self.per_tp_message_size = self.bsz * self.seq_len * self.hidden_size * (2 if args.mixed_precision else 4)
+                self.per_tp_message_size = self.bsz * self.seq_len * self.hidden_size * (2 if args.mixed_precision else 4) # 难道tp megatron-sp ulysses的通信量是一样的？
                 if  self.per_tp_message_size in self.sp_dict:
                     per_tp_message_time = self.sp_dict[ self.per_tp_message_size]
                 else:
@@ -374,6 +378,7 @@ class TimeCostModel:
                 self.tp_message_size /= 2
             
             # [calculate]:calculate tc
+            # 当self.sp_space都不是tp+sp时，说明就是只有tp，然后这个就是纯tensor parallel，所以其实下面就不可能有sp in args.strategy[-1] and args.strategy[-1]['sp'] == 1的情况
             if 'sp' in args.strategy[-1].keys() and args.strategy[-1]['sp'] == 1:
                 if self.tp_size == 1 or self.dp_size == 1:
                     tc = args.comm_coe_dict['%d'%self.tp_size] if '%d'%self.tp_size in args.comm_coe_dict.keys() else args.comm_coe_dict['%d_1'%self.tp_size]
@@ -475,7 +480,7 @@ class OtherTimeCostModel:
     }
     
     def __init__(self, 
-                mbsz:int = 1, 
+                mbsz:int = 1,  # 这个也是在min_tp下的mbsz
                 pp_deg:int = 2, 
                 world_size:int = 8, 
                 vsp:bool = False, 
@@ -515,7 +520,7 @@ class OtherTimeCostModel:
         
         # Aggregate all arguments
         self.args = SimpleNamespace()
-        self.args.mbsz = mbsz
+        self.args.mbsz = mbsz # 这个我还需要去check一下 到底是什么？这个其实也是在min_tp下的mbsz
         self.args.pp_deg = pp_deg
         self.args.world_size = world_size
         self.args.vsp = vsp
@@ -539,8 +544,8 @@ class OtherTimeCostModel:
             self.per_tp_message_time = []
             self.tp_message_size = []
             for seq_len in self.sequence_length_list:
-                if args.vsp == 0:
-                    if self.sp_space == 'tp+sp':
+                if args.vsp == 0: # tp / tp + megatron-sp
+                    if self.sp_space == 'tp+sp':  # using a fitting approach 这两个地方的mbsz是需要进行scaling的
                         self.per_tp_message_size.append(args.mbsz * seq_len * args.hidden_size * (2 if args.mixed_precision else 4))
                         if k == 1:
                             self.per_tp_message_time.append(0)
@@ -551,7 +556,7 @@ class OtherTimeCostModel:
                                 def linear_func(x, m, c):
                                     return m * x + c
                                 self.per_tp_message_time.append(linear_func( 1 / 1024 / 1024 * self.per_tp_message_size[-1], *args.allreduce_dict[k]["popt"] ))
-                    else:
+                    else:  # message_size * comm_coe
                         dp_size = args.world_size // args.pp_deg // k
                         if k == 1 or dp_size == 1:
                             tp_coe = args.comm_coe_dict['%d'%k] if '%d'%k in args.comm_coe_dict.keys() else args.comm_coe_dict['%d_1'%k]
@@ -578,7 +583,7 @@ class OtherTimeCostModel:
                 return m * x + c
             if args.pp_deg == 1:
                 if isinstance(args.other_time_profiled ,np.ndarray):
-                    self.fct[k] = linear_func(args.mbsz / args.min_tp, *args.other_time_profiled)
+                    self.fct[k] = linear_func(args.mbsz / args.min_tp, *args.other_time_profiled) # 除以min_Tp的含义是什么 就是将计算均分到min_tp中
                 else:
                     self.fct[k] = args.mbsz / args.min_tp * args.other_time_profiled
             else:
@@ -603,6 +608,7 @@ class OtherTimeCostModel:
                     self.dp_coe[k] = args.comm_coe_dict['%d_0'%dp_size]
                 self.dp_coe[k] *= (dp_size - 1) / dp_size # bus -> alg
             else:
+                # 这个时候不除以k是因为全都用来作为sdp了，但是paddle这边不是
                 dp_size = args.world_size // args.pp_deg
                 self.dp_coe[k] = args.comm_coe_dict['%d'%dp_size] if '%d'%dp_size in args.comm_coe_dict.keys() else args.comm_coe_dict['%d_1'%dp_size]
                 self.dp_coe[k] *= (dp_size - 1) / dp_size # bus -> alg
@@ -692,7 +698,8 @@ def get_time_cost_all_stages(layer_timecosts, pp_stage_division):
         stage_timecosts.append(np.sum(layer_timecosts[layer_start_id:layer_end_id]))
     return stage_timecosts
 
-def pipeline_costmodel(timecostmodel, layer_num_list, model_args_list, train_args_list, parallel_args_list, profile_model_args_list, profile_hardware_args_list, strategies, partition, chunks, bsz, min_tp, other_time_cost, logger=None, return_stage_cost=False):
+def pipeline_costmodel(timecostmodel, layer_num_list, model_args_list, train_args_list, parallel_args_list, profile_model_args_list, profile_hardware_args_list, 
+                       strategies, partition, chunks, bsz, min_tp, other_time_cost, logger=None, return_stage_cost=False):
     if strategies is None:
         if return_stage_cost:
             return [np.inf] * len(partition), np.inf

@@ -100,10 +100,10 @@ class GalvatronSearchEngine():
     # Generating Strategies, Loading Profiled Memory & Time Config, Setting Memory & Time Cost Models
     def initialize_search_engine(self):
         self.generate_strategies()
-        self.get_profiled_model_configs()
-        self.get_profiled_hardware_configs()
-        self.set_cost_models()
-        self.show_search_info()
+        # self.get_profiled_model_configs()
+        # self.get_profiled_hardware_configs()
+        # self.set_cost_models()
+        # self.show_search_info()
         
     def convert_keys_to_int(self, d):
         if isinstance(d, dict):
@@ -277,6 +277,8 @@ class GalvatronSearchEngine():
         overlap_coe_name = 'overlap_coefficient.json'
         args.overlap_coe_path = os.path.join(overlap_coe_path, overlap_coe_name)
         self.overlap_coe = read_json_config(args.overlap_coe_path)['overlap_coe']
+        
+        
         if args.sp_time_path is None:
             hardware_configs_dir = '../../profile_hardware/hardware_configs/'
             sp_time_path = os.path.join(self.path, hardware_configs_dir)
@@ -321,12 +323,12 @@ class GalvatronSearchEngine():
             profile_hardware_args = ProfileHardwareArgs(
                 bct_fct_coe=2,
                 extra_overhead=0,
-                comm_coe_dict=self.allreduce_comm_coe,
+                comm_coe_dict=self.allreduce_comm_coe, # comm_coe就是allreduce
                 dp_overlap_coe=self.overlap_coe,
                 bct_overlap_coe=self.overlap_coe,
                 p2p_comm_coe_dict=self.p2p_comm_coe,
                 costmodel_coe=self.args.costmodel_coe,
-                allreduce_dict=self.sp_allreduce,
+                allreduce_dict=self.sp_allreduce, # allreduce_dict是在加入ulysses维度时，采用的allreduce方案
                 all2all_dict=self.sp_all2all,
             )
             self.model_args_list.append(model_args)
@@ -351,8 +353,11 @@ class GalvatronSearchEngine():
         while i<=self.args.gpu_num and i <= self.args.max_tp_deg:
             total_min_tp.append(i)
             i *= 2
-        if self.args.disable_vtp:
+            
+        if self.args.disable_vtp: # 因为禁止了vocab tp，所以min_tp只能是1
             total_min_tp = [1]
+        
+        # sp_search_speace是一个列表，在枚举其内容的时候，是起到一个filter的作用
         if not self.args.global_memory_buffer:
             total_max_tp = [self.args.max_tp_deg]
             sp_search_speace = [1, 3]
@@ -360,6 +365,7 @@ class GalvatronSearchEngine():
             total_max_tp = total_min_tp
             sp_search_speace = [1, 2, 3] # 1 tp, 2 sp, 3 tp+sp
         
+        # 这段代码也理解了
         if self.args.sp_space == 'tp+sp':
             total_vsp = [0, 1]
         elif self.args.sp_space == 'tp':
@@ -370,6 +376,11 @@ class GalvatronSearchEngine():
             total_vsp = [1]
             sp_search_speace = [2]
 
+        print(f'[linguangming] sp_search_speace={sp_search_speace}')
+        print(f'early  exit')
+        exit(0)
+        
+        
         if self.args.disable_sdp:
             total_embed_sdp = [0]
         else:
@@ -383,17 +394,19 @@ class GalvatronSearchEngine():
 
             results = dict()
             
-            for sp_search in sp_search_speace:
-                if sp_search == 1 and vsp == 1:
+            for sp_search in sp_search_speace: #  sp_search是起到一个filter的作用
+                
+                # 以下这段代码理解了
+                if sp_search == 1 and vsp == 1: # 如果sp_search为1，即tp，并且vocab_sp启用，则直接跳过
                     continue
-                if sp_search == 2 and vsp == 0:
+                if sp_search == 2 and vsp == 0:  # 如果sp_search为2，即sp，并且vocab_sp禁用，则直接跳过
                     continue
         
                 strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
                 strategies = [s for s in strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
-                if sp_search == 1:
+                if sp_search == 1: #  如果sp_search为1，即tp，则筛选出tp_size为1，或者tp_size大于1且sp为0的
                     strategies = [s for s in strategies if 'sp' not in s[-1] or ('sp' in s[-1] and s[-1]['sp'] == 0)]
-                if sp_search == 2:
+                if sp_search == 2: # 如果sp_search为2，即sp，则筛选出tp_size为1，或者tp_size大于1且sp为1的
                     strategies = [s for s in strategies if 'sp' not in s[-1] or ('sp' in s[-1] and s[-1]['sp'] == 1)]
                 if len(strategies) == 0:
                     continue
@@ -407,9 +420,10 @@ class GalvatronSearchEngine():
                 
                 strategies = [s for s in strategies if s[0] in pp_deg_list]
                 
+                # 在同一个chunk，即accumulate_step下，如果pp_size不同，那么微批次大小也不同，所以会有一个dict
                 mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
                 for pp in pp_deg_list:
-                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
+                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk # 这个是除了dp维度和累积步数维度的size
                 
                 # strict mode: search chunk must be equal to real chunk 
                 strategies = [s for s in strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
@@ -496,7 +510,7 @@ class GalvatronSearchEngine():
                                     print(f"Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}", flush=True)
 
                                     results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp)
-
+                                    
         for bsz in results:
             for chunk in results[bsz]:
                 for min_tp in results[bsz][chunk]:
@@ -784,6 +798,8 @@ class GalvatronSearchEngine():
         args = self.args
         gpu_num = args.gpu_num
         strategies = self.generate_dp_tp_pp_sdp()
+        
+        # 以下就是根据一些disable做一些filter，我目前先不care这个，产生策略的方式也就这样把，现在写完了，然后去写搜索的东西
         if args.search_space == 'dp+tp':
             args.disable_sdp = 1
             args.disable_pp = 1
@@ -840,13 +856,13 @@ class GalvatronSearchEngine():
                 for tp in total:
                     if pp*tp<=gpu_num:
                         dp = gpu_num // (pp * tp) 
-                        if tp==1 or tp == gpu_num/pp:
-                            if dp == 1:
+                        if tp==1 or tp == gpu_num/pp: # if tp == 1 or dp == 1
+                            if dp == 1: # dp == 1
                                 strategies.append([pp,tp,dp,{}])
-                            else:
+                            else: # dp != 1 and tp == 1
                                 strategies.append([pp,tp,dp,{'fsdp':0}])
                                 strategies.append([pp,tp,dp,{'fsdp':1}])
-                        else:
+                        else: # tp != 1 and dp != 1
                             strategies.append([pp,tp,dp,{'tp':0,'fsdp':0}])
                             strategies.append([pp,tp,dp,{'tp':0,'fsdp':1}])
                             strategies.append([pp,tp,dp,{'tp':1,'fsdp':0}])
@@ -892,6 +908,7 @@ class GalvatronSearchEngine():
         elif args.search_space == 'pp':
             strategies = [[args.max_pp_deg,1,gpu_num//args.max_pp_deg,{'fsdp':0}]]
         
+        # strategies[-1]中没有sp的话，是因为它的tp_size为1
         if args.sp_space == 'tp':
             for strategie in strategies:
                 if strategie[1] > 1:
@@ -1087,11 +1104,15 @@ def pp_division_even(layernum_list, pp_deg):
     pp_division = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
     return pp_division
     
+# 在_build_dp_and_run_multi_layer_type函数调用中，local_bsz是在给定的pp和global_bsz下,在min_tp下，每个dp维度能够分到的batch数量
+# strategy[1]则是min_tp
+# 我终于知道这个函数的作用是什么了
+# 就是计算出累积步数是多大，因为mbsz是min_tp下的，所以这个函数太抽象了
 def optimal_chunk_func_default(local_bsz, strategy, microbatch_size, min_tp):
     # if strategy[0] == 1:
     #     return 1
     assert(strategy[1] % min_tp == 0)
-    local_bsz = local_bsz // (strategy[1] // min_tp)
+    local_bsz = local_bsz // (strategy[1] // min_tp) #  该函数为当tp增大时，dp维度减小，local_bsz应该变大，这个地方有bug 但是只要每次strategy[1]==min_tp就不会出现问题
     chunk = np.ceil(local_bsz / microbatch_size)
     chunk = 1 if chunk == 0 else chunk
     # chunk = int(min(max_chunk,chunk))
