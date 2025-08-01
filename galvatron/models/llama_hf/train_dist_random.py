@@ -12,7 +12,7 @@ from galvatron.models.llama_hf.dataloader import DataLoaderForLlama, random_coll
 from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_llama_config, get_runtime_profiler, llama_model_hp
 from galvatron.utils import distributed_dataloader, print_loss, set_seed
 from megatron.training.arguments import _print_args
-
+import nvtx
 
 def train(args):
     local_rank = args.local_rank
@@ -23,6 +23,10 @@ def train(args):
 
     config = get_llama_config(args)
     model = llama_model_hp(config, args)
+    
+    print(f'[linguangming] model is {model}')
+    for name, param in model.named_parameters():
+        print(f"Parameter name: {name}, shape: {param.shape}, dtype: {param.dtype}")
 
     if local_rank == 0:
         print("Creating Dataset...")
@@ -52,33 +56,74 @@ def train(args):
         torch.set_grad_enabled(False)
 
     for ep in range(args.epochs):
+        
+        if ep == 1:
+            break
         if not args.check_loss and not args.profile:
             trainloader = tqdm(trainloader)
+         
+        iter_nsys_list = [6, 7, 8]
         for iter, batch in enumerate(trainloader):
-            tokens, kwargs, loss_func = batch
-            profiler.profile_time_start(iter)
-            profiler.profile_memory(iter, "Before Forward")
+            
+            if iter in iter_nsys_list:
+                if iter == iter_nsys_list[0]:
+                    print(f'Starting profiling at iteration {iter} for epoch {ep}.')
+                    torch.cuda.cudart().cudaProfilerStart()
 
-            input_ids = tokens
-            batch = [input_ids]
+                with nvtx.annotate(f"rank{torch.distributed.get_rank()}_Iteration{iter}", domain="torchTraining"):
+                    tokens, kwargs, loss_func = batch
+                    profiler.profile_time_start(iter)
+                    profiler.profile_memory(iter, "Before Forward")
 
-            loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
+                    input_ids = tokens
+                    batch = [input_ids]
 
-            profiler.profile_memory(iter, "After Backward")
+                    loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
 
-            optimizer.step()
+                    profiler.profile_memory(iter, "After Backward")
 
-            profiler.profile_memory(iter, "After optimizer_step")
+                    optimizer.step()
 
-            optimizer.zero_grad()
+                    profiler.profile_memory(iter, "After optimizer_step")
 
-            print_loss(args, loss, ep, iter)
+                    optimizer.zero_grad()
 
-            profiler.post_profile_memory(iter)
-            profiler.profile_time_end(iter)
+                    print_loss(args, loss, ep, iter)
 
-            torch.distributed.barrier()
+                    profiler.post_profile_memory(iter)
+                    profiler.profile_time_end(iter)
 
+                torch.distributed.barrier()
+                
+                if iter == iter_nsys_list[-1]:
+                    print(f'Stopping after {iter} iterations for epoch {ep}.')
+                    torch.cuda.cudart().cudaProfilerStop()
+            
+            else:      
+                tokens, kwargs, loss_func = batch
+                profiler.profile_time_start(iter)
+                profiler.profile_memory(iter, "Before Forward")
+
+                input_ids = tokens
+                batch = [input_ids]
+
+                loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
+
+                profiler.profile_memory(iter, "After Backward")
+
+                optimizer.step()
+
+                profiler.profile_memory(iter, "After optimizer_step")
+
+                optimizer.zero_grad()
+
+                print_loss(args, loss, ep, iter)
+
+                profiler.post_profile_memory(iter)
+                profiler.profile_time_end(iter)
+
+                torch.distributed.barrier()
+            
 
 if __name__ == "__main__":
     args = initialize_galvatron(model_args, mode="train_dist")

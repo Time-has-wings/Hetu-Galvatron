@@ -71,6 +71,8 @@ def set_model_config(config, args, overwrite_args=True):
         if args.set_seqlen_manually:
             config.max_position_embeddings = args.seq_length
 
+    config.intermediate_size = 11008  # [note] 直接全部设置为11008
+    
     # ======= Model Config --> Arguments ======
     overwrite_model_args(config, args)
     # This step is necessary that maintains the consistency of model config and arguments.
