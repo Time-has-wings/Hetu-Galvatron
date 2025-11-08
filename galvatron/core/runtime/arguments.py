@@ -177,11 +177,9 @@ def galvatron_training_args(parser, use_megatron=True):
         help="Whether to use DeepSpeed Ulysses or Megatron-TP",
     )
     group.add_argument(
-        "--no_async_grad_reduce",
-        action="store_false",
-        help="Disable async grad reduce so that gradient will be reduce every micro batch. "
-        "Ensure Zero3 memory cost when chunk > 1.",
-        dest="async_grad_reduce",
+        "--async_grad_reduce", type=int, default=1,
+        help='Whether to async grad reduce so that gradient will be reduce every micro batch. '
+        'Ensure Zero3 memory cost when chunk > 1.',
     )
     group.add_argument(
         "--reduce_in_fp32",

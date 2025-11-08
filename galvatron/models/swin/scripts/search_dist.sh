@@ -44,7 +44,7 @@ SEARCH_SPACE_ARGS="
     --fine_grained_mode ${FINE_GRAINED} \
     --time_profile_mode static \
     --memory_profile_mode static \
-    --no_async_grad_reduce
+    --async_grad_reduce 0 \
 "
 
 SEARCH_ARGS="

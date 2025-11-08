@@ -42,7 +42,7 @@ TRAIN_ARGS="
     --lr-warmup-fraction .01 \
     --check_loss 0 \
     --profile 1 \
-    --no_async_grad_reduce \
+    --async_grad_reduce 0 \
     --save_profiled_memory 0"
 
 DATA_ARGS="

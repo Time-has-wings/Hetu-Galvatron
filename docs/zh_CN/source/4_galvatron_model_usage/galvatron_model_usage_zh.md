@@ -207,7 +207,7 @@ JSON 配置字段按类别组织：
 
 设置 `use_ulysses` 以启用 [Ulysses-SP](https://github.com/microsoft/DeepSpeed/blob/master/blogs/deepspeed-ulysses/README.md) 方法，这将替代 `Megatron-TP-SP`。一旦激活，TP（张量并行）维度将自动转换为 SP（序列并行）维度。
 
-设置 `no_async_grad_reduce` 以禁用默认启用的异步梯度同步方法。在 Galvatron 中，在训练的每次迭代期间，当需要梯度累积时，默认行为是仅在所有反向传播完成后执行梯度 reduce scatter 操作。这种方法减少了通信开销但增加了额外的内存使用：每个设备在梯度同步之前都保持梯度的完整副本，导致 Zero-2 降级为 Zero-1。当设置 `no_async_grad_reduce` 时，Galvatron 在每个反向步骤后同步梯度，保持低内存使用。然而，这引入了额外的通信，尽管其中大部分可以与计算重叠。权衡是成本模型的复杂性增加，可能降低成本模型的准确性。我们计划在未来提供更细粒度和准确的成本模型。
+设置 `async_grad_reduce`为0 以禁用默认启用的异步梯度同步方法。在 Galvatron 中，在训练的每次迭代期间，当需要梯度累积时，默认行为是仅在所有反向传播完成后执行梯度 reduce scatter 操作。这种方法减少了通信开销但增加了额外的内存使用：每个设备在梯度同步之前都保持梯度的完整副本，导致 Zero-2 降级为 Zero-1。当设置 `async_grad_reduce`为0时，Galvatron 在每个反向步骤后同步梯度，保持低内存使用。然而，这引入了额外的通信，尽管其中大部分可以与计算重叠。权衡是成本模型的复杂性增加，可能降低成本模型的准确性。我们计划在未来提供更细粒度和准确的成本模型。
 
 有关训练参数的完整列表，请参考 [arguments.py](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/main/galvatron/core/arguments.py) 中的 ```galvatron_training_args```。
 

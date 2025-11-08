@@ -103,10 +103,9 @@ def galvatron_search_args(parser):
         dest='global_memory_buffer'
     )
     group.add_argument(
-        "--no_async_grad_reduce", action="store_false",
-        help='Disable async grad reduce so that gradient will be reduce every micro batch. '
+        "--async_grad_reduce", type=int, default=1,
+        help='Whether to async grad reduce so that gradient will be reduce every micro batch. '
         'Ensure Zero3 memory cost when chunk > 1.',
-        dest='async_grad_reduce'
     )
     group.add_argument(
         "--memory_profiling_path", type=str, default=None, help="Path to memory profiling config."
