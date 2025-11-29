@@ -1,6 +1,6 @@
 NUM_NODES=1
 NUM_GPUS_PER_NODE=8
-BACKEND=nccl
+BACKEND=torch
 #====== for NCCL =======
 NCCLTEST_DIR="../site_package/nccl-tests"
 MPI_PATH=/usr/local/mpi/
@@ -27,7 +27,7 @@ PROFILE_ARGS="
     --scale ${SCALE} \
     --hostfile ${HOSTFILE} \
     --avg_or_min_or_first first \
-    --max_pp_deg 16 \
+    --max_pp_deg 8 \
     --master_addr ${ADDR} \
     --master_port ${PORT} \
     --envs ${ENVS} \

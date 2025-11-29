@@ -66,13 +66,11 @@ def galvatron_profile_args(parser):
     )
     group.add_argument("--use-flash-attn", action="store_true", help="Use FlashAttention implementation of attention.")
     group.add_argument("--extra_args_str", type=str, default="", help="Extra arguments for megatron initilization.")
-
     group.add_argument(
         "--sequence_parallel",
         action="store_true",
         help="Whether to use sequence parallel",
     )
-
     group.add_argument(
         "--shape_order",
         type=str,
@@ -80,21 +78,23 @@ def galvatron_profile_args(parser):
         help="Model shape order.",
         choices=["SBH", "BSH"],
     )
-
     group.add_argument(
         "--make-vocab-size-divisible-by",
         type=int,
         default=128,
         help="Pad the vocab size to be divisible by this value." "This is added for computational efficieny reasons.",
     )
-    
+    group.add_argument(
+        "--async_grad_reduce", type=int, default=1,
+        help='Whether to async grad reduce so that gradient will be reduce every micro batch. '
+        'Ensure Zero3 memory cost when chunk > 1.',
+    )
     group.add_argument(
         "--profile_unit",
         choices=["attention", "mlp", "all"],
         default="all",
         help="Profile granularity",
     )
-    
     group.add_argument(
         "--profile_flow_control",
         choices=["all", "scripts_only", "launch_only", "data_only"],

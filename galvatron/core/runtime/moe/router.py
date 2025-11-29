@@ -113,6 +113,9 @@ class TopKRouter(Router):
 
         self.topk = self.config.moe_router_topk
         self.routing_type = self.config.moe_router_load_balancing_type
+        # self.routing_type = 'forced_uniform' # [DEBUG]
+        print(f'[BUDEG] TopKRouter routing_type: {self.routing_type}')
+
         self.score_function = self.config.moe_router_score_function
         self.input_jitter = None
 
@@ -173,7 +176,18 @@ class TopKRouter(Router):
         map = torch.zeros_like(logits).int().scatter(1, indices, 1).bool()
         scores = logits * map
         return scores, map
-
+    
+    def forced_uniform_load_balancing(self, logits: torch.Tensor):
+        expert_num = logits.shape[1]
+        token_num = logits.shape[0]
+        topk = self.topk
+        total_list = [list(range(i, min(i+topk, expert_num))) for i in range(0, expert_num, topk)]
+        indices_list = [total_list[i % len(total_list)] for i in range(token_num)]
+        indices = torch.tensor(indices_list, device=logits.device)
+        map = torch.zeros_like(logits).int().scatter(1, indices, 1).bool()
+        scores = logits * map
+        return scores, map
+    
     def compute_routing_scores_for_aux_loss(self, logits: torch.Tensor) -> torch.Tensor:
         """Compute routing scores based on the score function.
 
@@ -398,6 +412,8 @@ class TopKRouter(Router):
             scores, routing_map = self.aux_loss_load_balancing(logits)
         elif self.routing_type == "seq_aux_loss":
             scores, routing_map = self.seq_aux_loss_load_balancing(logits, bsz, seq_length)
+        elif self.routing_type == 'forced_uniform':
+            scores, routing_map = self.forced_uniform_load_balancing(logits)
         elif self.routing_type == "none":
             # A naive top-k routing without load balancing
             scores, routing_map, _ = topk_softmax_with_capacity(

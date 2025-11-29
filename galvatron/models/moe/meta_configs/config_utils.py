@@ -117,11 +117,15 @@ def overwrite_megatron_args(config, args):
     
     args.num_experts = config.num_local_experts
     args.moe_ffn_hidden_size = config.intermediate_size
-    if args.router_aux_loss_coef is None or args.router_aux_loss_coef > 0:
-        args.moe_router_load_balancing_type = "none"
+
+    if args.moe_router_load_balancing_type is not None:
+        pass
     else:
-        args.moe_router_load_balancing_type = "aux_loss"
-        args.moe_aux_loss_coeff = args.router_aux_loss_coef
+        if args.router_aux_loss_coef is None or args.router_aux_loss_coef > 0:
+            args.moe_router_load_balancing_type = "none"
+        else:
+            args.moe_router_load_balancing_type = "aux_loss"
+            args.moe_aux_loss_coeff = args.router_aux_loss_coef
 
     args.moe_router_topk = config.num_experts_per_tok
     args.moe_token_dispatcher_type = "alltoall" # "flex" for deepep, use with moe_enable_deepep

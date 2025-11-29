@@ -38,34 +38,38 @@ MODEL_ARGS="
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_attention_heads 32 \
-    --seq_length 5120"
+    --seq_length 1024"
+
+# PROFILE_ARGS="
+#     --profile_mode batch \
+#     --profile_type computation \
+#     --profile_seq_length_list 1024 \
+#     --profile_min_batch_size 1 \
+#     --profile_max_batch_size 12 \
+#     --profile_batch_size_step 1 \
+#     --layernum_min 2 \
+#     --layernum_max 4 \
+#     --mixed_precision bf16 \
+#     --use-flash-attn \
+#     --sequence_parallel \
+#     --profile_flow_control all \
+#     --profile_unit attention"
 
 PROFILE_ARGS="
-    --profile_mode batch \
+    --profile_mode sequence \
     --profile_type computation \
-    --profile_seq_length_list 8192 \
-    --profile_min_batch_size 1 \
-    --profile_max_batch_size 12 \
-    --profile_batch_size_step 1 \
-    --layernum_min 2 \
-    --layernum_max 4 \
+    --profile_batch_size 1 \
+    --profile_min_seq_length 512 \
+    --profile_max_seq_length 8192 \
+    --profile_seq_length_step 512 \
+    --layernum_min 1 \
+    --layernum_max 2 \
     --mixed_precision bf16 \
     --use-flash-attn \
     --sequence_parallel \
-    --profile_flow_control scripts_only \
-    --profile_unit mlp"
-
-# PROFILE_ARGS="
-#     --profile_mode sequence \
-#     --profile_type computation \
-#     --profile_batch_size 1 \
-#     --profile_min_seq_length 4096 \
-#     --profile_max_seq_length 32768 \
-#     --profile_seq_length_step 4096 \
-#     --layernum_min 1 \
-#     --layernum_max 2 \
-#     --mixed_precision bf16 \
-#     --use-flash-attn"
+    --profile_flow_control all \
+    --profile_unit mlp \
+"
 
 # models in flash_attn cannot use fp32 without flash_attn
 # PROFILE_ARGS="

@@ -281,7 +281,18 @@ class RuntimeProfiler(BaseProfiler):
 
     def _process_time_results(self) -> None:
         """Process and save time profiling results"""
-        avg_time = sum(self.time_list) / len(self.time_list)
+        import copy
+        if len(self.time_list) > 10:
+            time_list = copy.deepcopy(self.time_list[10:])
+        else:
+            time_list = copy.deepcopy(self.time_list)
+
+        import numpy as np
+        t = np.array(time_list)
+        avg, std = t.mean(), t.std()
+        valid = t[(t >= avg - 3*std) & (t <= avg + 3*std)]
+        avg_time = valid.sum() / len(valid) if len(valid) else 0
+        # avg_time = sum(time_list) / len(time_list)
         print(f"Average iteration time is: {avg_time:.4f} s")
 
         args = self.args

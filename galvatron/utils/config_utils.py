@@ -1,10 +1,8 @@
 import json
 import os
-from .strategy_utils import form_strategy
 from typing import List
 import numpy as np
 from scipy.optimize import curve_fit
-import torch
 
 def str2array(s):
     return list(map(int,s.split(',')))
@@ -69,6 +67,10 @@ def read_allreduce_bandwidth_config(config_path, gpu_num):
     if max_dp >= 2:
         bandwidth_dict['%d'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
         comm_coe_dict['%d'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
+        bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
+        comm_coe_dict['%d_0'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
+        bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
+        comm_coe_dict['%d_1'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
     max_dp = max_dp // 2
     while max_dp >= 2:
         bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_0'%(max_dp)]
@@ -139,10 +141,3 @@ def remap_config(config, op):
         time_config["popt"] = popt
         
     return remap_config
-        
-def print_single_rank(message, rank=0):
-    if torch.distributed.is_initialized():
-        if torch.distributed.get_rank() == rank:
-            print(message, flush=True)
-    else:
-        print(message, flush=True)

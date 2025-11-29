@@ -530,6 +530,19 @@ class ModelProfiler(BaseProfiler):
                     )
                     act_per_layer_per_sample *= world_size / bsz
 
+                    act_per_layer_per_sample_peak = (
+                        (
+                            re[self.key_format(layernum_key_1, bsz, seq_info, 0, "act_peak")]
+                            - re[self.key_format(layernum_key_0, bsz, seq_info, 0, "act_peak")]
+                        )
+                        / layernum_diff
+                        * pp_deg
+                        / (pp_deg * tp_deg)
+                    )
+                    act_per_layer_per_sample_peak *= world_size / bsz
+
+                    act_per_layer_per_sample = max(act_per_layer_per_sample, act_per_layer_per_sample_peak)
+
                     # Adjust for ZeRO-3
                     if self.args.profile_dp_type == "zero3":
                         param_per_layer *= world_size // pp_deg // tp_deg

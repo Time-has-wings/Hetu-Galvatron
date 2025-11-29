@@ -135,6 +135,7 @@ def _gather_along_first_dim(input_, group=None, output_split_sizes=None, use_glo
         return input_
 
     dim_size = list(input_.size())
+    # print(f'[debug] _gather_along_first_dim function, input_.shape is {input_.shape} and input_.dtype is {input_.dtype}')
     if output_split_sizes is None:
         dim_size[0] = dim_size[0] * world_size
 
@@ -375,6 +376,8 @@ class _ReduceScatterToSequenceParallelRegion(torch.autograd.Function):
         """Backward function."""
         input_split_sizes = ctx.input_split_sizes
         use_global_buffer = ctx.use_global_buffer
+        # print(f'_ReduceScatterToSequenceParallelRegion input_split_sizes: {input_split_sizes}')
+        # print(f'[debug] _ReduceScatterToSequenceParallelRegion backward running')
         return (
             _gather_along_first_dim(grad_output, ctx.group, input_split_sizes, use_global_buffer),
             None,

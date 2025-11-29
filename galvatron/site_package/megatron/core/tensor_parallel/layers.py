@@ -446,7 +446,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             all_gather_buffer = get_global_memory_buffer().get_tensor(dim_size, input.dtype, "mpu")
             if tp_group is None:
                 tp_group = get_tensor_model_parallel_group()
-            dist_all_gather_func(all_gather_buffer, input, group=tp_group)
+            dist_all_gather_func(all_gather_buffer, input, group=tp_group) # 将hidden_states沿着序列维度对齐，此处做第一次all_gather
             total_input = all_gather_buffer
         else:
             total_input = input
@@ -962,6 +962,7 @@ class ColumnParallelLinear(torch.nn.Module):
         ):
             input_parallel = input_
         else:
+            # print(f'[debug] call copt_to_tensor_model_parallel_region, input_.shape: {input_.shape}')
             input_parallel = copy_to_tensor_model_parallel_region(input_, self.tp_group)
 
         if self.config.defer_embedding_wgrad_compute:
@@ -979,7 +980,7 @@ class ColumnParallelLinear(torch.nn.Module):
 
         allreduce_dgrad = False if self.explicit_expert_comm else self.allreduce_dgrad
 
-        output_parallel = self._forward_impl(
+        output_parallel = self._forward_impl( # 进行第一次all_gather
             input=input_parallel,
             weight=weight,
             bias=bias,
@@ -1226,7 +1227,7 @@ class RowParallelLinear(torch.nn.Module):
             bias=None,
             gradient_accumulation_fusion=self.gradient_accumulation_fusion,
             allreduce_dgrad=allreduce_dgrad,
-            sequence_parallel=False,
+            sequence_parallel=False, # 此处设置了sequence_parallel为False，这是因为Col到Row是不需要进行转换的
             grad_output_buffer=None,
         )
 
@@ -1235,7 +1236,7 @@ class RowParallelLinear(torch.nn.Module):
             assert self.skip_bias_add
             output_ = output_parallel
         elif self.sequence_parallel:
-            output_ = reduce_scatter_to_sequence_parallel_region(output_parallel, self.tp_group)
+            output_ = reduce_scatter_to_sequence_parallel_region(output_parallel, self.tp_group) # 此处进行reduce_scatter
         else:
             output_ = reduce_from_tensor_model_parallel_region(output_parallel, self.tp_group)
         if not self.skip_bias_add:

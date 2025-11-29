@@ -20,6 +20,8 @@ from galvatron.core.runtime.moe.token_dispatcher import (
     MoEFlexTokenDispatcher,
 )
 
+from galvatron.utils.training_utils import print_single_rank, store_single_rank, store_expert_tendency
+import torch.distributed as dist
 
 class MoEAttention_tp(nn.Module):
     def __init__(self, config, layer_number, tp_group=None, sp_group=None, cp_group=None):
@@ -194,8 +196,34 @@ class MoEMLP_tp(nn.Module):
             (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(
                     hidden_states, probs, routing_map
                 )
+            # print_single_rank(f'[rank{torch.distributed.get_rank()}], tokens_per_expert: {tokens_per_expert}', rank=torch.distributed.get_rank())
+            # print_single_rank(f'[rank{torch.distributed.get_rank()}], dispatched_input.shape: {dispatched_input.shape}', rank=torch.distributed.get_rank())
             expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
+
+            info = {}
+            if not hasattr(self, 'chunk'):
+                self.chunk = 0
+            else:
+                self.chunk += 1
+            info['chunk'] = self.chunk
+            info['layer_id'] = self.idx
+            info['token_num_per_expert_list'] = tokens_per_expert.cpu().tolist()
+            store_single_rank(info)
+
+            # info = {}
+            # info["chunk"] = self.chunk
+            # info["layer_id"] = self.idx
+            # store_routing_map = routing_map.cpu().tolist()
+            # true_indices_per_row = [
+            #     [idx for idx, val in enumerate(row) if val]
+            #     for row in store_routing_map
+            # ]
+            # info['tendency'] = true_indices_per_row
+            # store_expert_tendency(info)
+
+            # print_single_rank(f'[rank{torch.distributed.get_rank()}], expert_output.shape: {expert_output.shape}', rank=torch.distributed.get_rank())
             hidden_states, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
+            # print_single_rank(f'[rank{torch.distributed.get_rank()}], hidden_states.shape: {hidden_states.shape}', rank=torch.distributed.get_rank())
             hidden_states = hidden_states + mlp_residual
         else:
             hidden_states, mlp_bias = self.mlp(hidden_states)
@@ -221,7 +249,10 @@ class MoELayer_tp(nn.Module):
             attention_mask,
             rotary_embedding,
         )
-        probs, routing_map = self.router(attention_output)
+        # print_single_rank(f'[rank {dist.get_rank()}] [layer {self.idx}] [attention_output.shape] {attention_output.shape}')
+        probs, routing_map = self.router(attention_output) # probs是router返回的score
+        # print_single_rank(f'[rank {dist.get_rank()}] [layer {self.idx}] [probs.shape] {probs.shape}')
+        # print_single_rank(f'[rank {dist.get_rank()}] [layer {self.idx}] [routing_map.shape] {routing_map.shape}')
         layer_output = self.mlp(attention_output, mlp_residual, probs, routing_map)
         return layer_output
 
@@ -229,11 +260,13 @@ class MoELayer_attention(nn.Module):
     def __init__(self, config, layer_number, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         self.attention = MoEAttention_tp(config, layer_number, tp_group, sp_group, cp_group)
+        self.router = MoERouter(layer_number)
         self.idx = layer_number
     
     def forward(self, hidden_states, attention_mask=None, rotary_embedding=None):
         attention_output, mlp_residual = self.attention(hidden_states, attention_mask, rotary_embedding)
-        attention_output += mlp_residual # MLP residual connection
+        _, _ = self.router(attention_output)
+        # attention_output += mlp_residual # MLP residual connection   #  注意一下是否需要这个操作。有这一行时，进行profile_memory时会出现bug
         return attention_output
     
 class MoELayer_mlp(nn.Module):

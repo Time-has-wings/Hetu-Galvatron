@@ -25,6 +25,8 @@ from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_llama_confi
 from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
 from galvatron.utils import distributed_dataloader, print_loss, set_seed, print_param_num
 from megatron.training.arguments import _print_args
+import torch.profiler as torch_profiler
+from datetime import datetime
 
 
 def train(args):
@@ -51,47 +53,112 @@ def train(args):
     optimizer, opt_param_scheduler = get_optimizer_and_param_scheduler(model, args)
 
     path = os.path.dirname(os.path.abspath(__file__))
-    profiler = get_runtime_profiler(args, path, config, start_iter=0)
+    profiler = get_runtime_profiler(args, path, config, start_iter=0, end_iter=args.train_iters)
 
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:
         print("Start training...")
 
-    for iter in range(args.iteration, args.train_iters):
-        tokens, kwargs, loss_func = get_batch(train_data_iterator)
-    
-        profiler.profile_time_start(iter)
-        profiler.profile_memory(iter, "Before Forward")
+    # trace = os.getenv('trace', default=False)
+    # trace = True
+    trace = int(os.getenv('trace', default=0))
+    current_time = datetime.now()
+    current_time = current_time.strftime("%Y-%m-%d-%H-%M-%S")
 
-        input_ids = tokens
-        batch = [input_ids]
-        loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
+    if trace == False:
+        for iter in range(args.iteration, args.train_iters):
+            tokens, kwargs, loss_func = get_batch(train_data_iterator)
+        
+            profiler.profile_time_start(iter)
+            profiler.profile_memory(iter, "Before Forward")
 
-        profiler.profile_memory(iter, "After Backward")
+            input_ids = tokens
+            batch = [input_ids]
+            loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
 
-        # for name, weight in model.named_parameters():
-        #     if torch.cuda.current_device() == 0:
-        #         print(f"final grad {name},{weight.grad}")
-        total_norm = clip_grad_norm(model, args.clip_grad)
-        # total_norm = 0.0
-        optimizer.step()
-        opt_param_scheduler.step(increment=args.global_batch_size)
+            profiler.profile_memory(iter, "After Backward")
 
-        profiler.profile_memory(iter, "After optimizer_step")
+            # for name, weight in model.named_parameters():
+            #     if torch.cuda.current_device() == 0:
+            #         print(f"final grad {name},{weight.grad}")
+            total_norm = clip_grad_norm(model, args.clip_grad)
+            # total_norm = 0.0
+            optimizer.step()
+            opt_param_scheduler.step(increment=args.global_batch_size)
 
-        optimizer.zero_grad()
+            profiler.profile_memory(iter, "After optimizer_step")
 
-        # print_loss(args, loss, ep, iter)
+            optimizer.zero_grad()
 
-        profiler.post_profile_memory(iter)
-        for param_group in optimizer.param_groups:
-            learning_rate = param_group["lr"]
-        profiler.profile_time_end(iter, loss, learning_rate, total_norm)
+            # print_loss(args, loss, ep, iter)
 
-        torch.distributed.barrier()
+            profiler.post_profile_memory(iter)
+            for param_group in optimizer.param_groups:
+                learning_rate = param_group["lr"]
+            profiler.profile_time_end(iter, loss, learning_rate, total_norm)
 
-        if args.save != None and (iter + 1) % args.save_interval == 0:
-            save_llama_module(args.save, model, optimizer, opt_param_scheduler, iter + 1, args)
+            torch.distributed.barrier()
+
+            if args.save != None and (iter + 1) % args.save_interval == 0:
+                save_llama_module(args.save, model, optimizer, opt_param_scheduler, iter + 1, args)
+    else:
+        warmup_times = args.train_iters - 20
+        active_times = 4
+        export_iter = warmup_times + active_times + 2
+        
+        with torch_profiler.profile(
+            activities=[torch_profiler.ProfilerActivity.CPU, torch_profiler.ProfilerActivity.CUDA],
+            schedule=torch_profiler.schedule(
+                wait=0,
+                warmup=warmup_times,
+                active=active_times,
+                repeat=1
+            ),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        ) as prof:
+            for iter in range(args.iteration, args.train_iters):
+                tokens, kwargs, loss_func = get_batch(train_data_iterator)
+            
+                profiler.profile_time_start(iter)
+                profiler.profile_memory(iter, "Before Forward")
+
+                input_ids = tokens
+                batch = [input_ids]
+                loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
+
+                profiler.profile_memory(iter, "After Backward")
+
+                # for name, weight in model.named_parameters():
+                #     if torch.cuda.current_device() == 0:
+                #         print(f"final grad {name},{weight.grad}")
+                total_norm = clip_grad_norm(model, args.clip_grad)
+                # total_norm = 0.0
+                optimizer.step()
+                opt_param_scheduler.step(increment=args.global_batch_size)
+
+                profiler.profile_memory(iter, "After optimizer_step")
+
+                optimizer.zero_grad()
+
+                # print_loss(args, loss, ep, iter)
+
+                profiler.post_profile_memory(iter)
+                for param_group in optimizer.param_groups:
+                    learning_rate = param_group["lr"]
+                profiler.profile_time_end(iter, loss, learning_rate, total_norm)
+
+                torch.distributed.barrier()
+
+                prof.step()
+                
+                if iter == export_iter:
+                    print(f'[linguangming] start to export chrome_trace')
+                    prof.export_chrome_trace(f"llama_hf_trace_rank{rank}_iter{args.train_iters - 20}_to_{args.train_iters - 1}_{current_time}.json")
+
+                if args.save != None and (iter + 1) % args.save_interval == 0:
+                    save_llama_module(args.save, model, optimizer, opt_param_scheduler, iter + 1, args)
 
 
 if __name__ == "__main__":

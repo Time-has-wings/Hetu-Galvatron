@@ -1,8 +1,19 @@
+import os
+import json
 import torch
 import numpy as np
 import random
+from dataclasses import dataclass
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+
+@dataclass
+class ColorSet:
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    BLUE = "\033[34m" 
+    RESET = "\033[0m"
 
 def set_seed(seed = 1234):
     np.random.seed(seed)
@@ -39,3 +50,53 @@ def print_loss(args, loss, ep, iter):
             print('(Iteration %d): Loss = %.3f'% (iter,loss))
         else:
             print('[Epoch %d] (Iteration %d): Loss = %.3f'% (ep,iter,loss))
+
+def print_single_rank(message, rank=0):
+    if torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == rank:
+            print(message, flush=True)
+    else:
+        print(message, flush=True)
+
+def store_single_rank(info,):
+    chunk = info['chunk']
+    # expert_id_list = info['expert_id_list']
+    layer_id = info['layer_id']
+    token_num_per_expert_list = info['token_num_per_expert_list']
+
+    store_file_name = f'./route_info/rank_{torch.distributed.get_rank()}.json'
+    os.makedirs(os.path.dirname(store_file_name), exist_ok=True)
+
+    if os.path.exists(store_file_name):
+        with open(store_file_name, 'r') as f:
+            existing_data = json.load(f)
+    else:
+        existing_data = {}
+
+    if str(layer_id) not in existing_data.keys():
+        existing_data[str(layer_id)] = {}
+    existing_data[str(layer_id)][str(chunk)] = token_num_per_expert_list
+
+    with open(store_file_name, 'w') as f:
+        json.dump(existing_data, f, indent=4)
+
+def store_expert_tendency(info):
+    chunk = info['chunk']
+    layer_id = info['layer_id']
+    tendency = info['tendency']
+
+    store_file_name = f'./route_info/rank_{torch.distributed.get_rank()}_tendency.json'
+    os.makedirs(os.path.dirname(store_file_name), exist_ok=True)
+
+    if os.path.exists(store_file_name):
+        with open(store_file_name, 'r') as f:
+            existing_data = json.load(f)
+    else:
+        existing_data = {}
+
+    if str(chunk) not in existing_data.keys():
+        existing_data[str(chunk)] = {}
+    existing_data[str(chunk)][str(layer_id)] = tendency
+
+    with open(store_file_name, 'w') as f:
+        json.dump(existing_data, f, indent=4)

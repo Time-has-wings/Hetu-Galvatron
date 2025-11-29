@@ -563,3 +563,21 @@ class DpOnModel:
                 min_vtp = vtp
 
         return min_comm_cost, min_res_list, min_pp_deg, min_mem_remain, min_mem_cost, min_vtp
+    
+
+class DPAlgOptimize():
+    def __init__(self, layernum, strategy_num_list, layer_time_no_sync_cost_list, layer_memory_cost_list, extra_memory_occupy=0, memory_constraint=1024):
+        assert layernum == len(strategy_num_list)
+        assert layernum == len(layer_time_no_sync_cost_list)
+        assert layernum == len(layer_memory_cost_list)
+        for layer_id in range(layernum):
+            assert strategy_num_list[layer_id] == len(layer_time_no_sync_cost_list[layer_id])
+            assert strategy_num_list[layer_id] == len(layer_memory_cost_list[layer_id])
+        self.layernum = layernum
+        
+    def fit(self):
+        time_cost = 1
+        memory_cost = 2
+        memory_remain = 3
+        strategy_idx_select_list = [0 for _ in range(self.layernum)]
+        return time_cost, memory_cost, memory_remain, strategy_idx_select_list

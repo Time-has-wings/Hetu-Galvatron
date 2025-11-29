@@ -11,6 +11,7 @@ LAUNCHER="${LAUNCHER} --nproc_per_node ${NUM_GPUS_PER_NODE}"
 
 export PROFILE_LAUNCHER="$LAUNCHER"
 export PROFILE_TRAINER="train_dist_random.py"
+# export PROFILE_TRAINER="train_dist.py"
 
 MODEL_ARGS="
     --model_size llama-7b \
@@ -27,13 +28,14 @@ PROFILE_ARGS_BF16="
     --profile_type memory \
     --profile_batch_size 8 \
     --profile_seq_length_list 2048 \
-    --layernum_min 1 \
-    --layernum_max 2 \
+    --layernum_min 3 \
+    --layernum_max 4 \
     --max_tp_deg 8 \
     --profile_dp_type zero3 \
     --mixed_precision bf16 \
     --sequence_parallel \
     --use-flash-attn \
+    --async_grad_reduce 0 \
     --profile_flow_control all \
     --profile_unit all"
 

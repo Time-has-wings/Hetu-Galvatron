@@ -80,6 +80,13 @@ def model_args(parser):
         default=0.02,
         help="Router aux loss coefficient",
     )
+    group.add_argument(
+        "--moe_router_load_balancing_type",
+        type=str,
+        default=None,
+        help="Load balancing strategy type for the MOE (Mixture of Experts) router"
+    )
+
     return parser
 
 

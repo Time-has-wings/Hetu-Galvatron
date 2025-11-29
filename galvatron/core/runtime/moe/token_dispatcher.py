@@ -28,6 +28,7 @@ from megatron.core.transformer.moe.moe_utils import (
 )
 from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 from megatron.core.transformer.transformer_config import TransformerConfig
+from galvatron.utils.training_utils import print_single_rank
 
 """ We use the following notation throughout this file:
      H: hidden size
@@ -404,7 +405,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             return num_tokens_per_local_expert
 
         # [num_experts], number of tokens assigned to each expert from the current rank's input.
-        num_local_tokens_per_expert = routing_map.sum(dim=0).long()
+        num_local_tokens_per_expert = routing_map.sum(dim=0).long() # [num_experts]
 
         if self.config.moe_expert_capacity_factor is not None:
             # Drop tokens to capacity, no padding.
@@ -430,13 +431,15 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             # num_global_tokens_per_expert represents the number of tokens sent to each
             # expert by all ranks.
             # [tp_size, ep_size, num_experts]
+            # print_single_rank(f'[rank {torch.distributed.get_rank()}] original num_global_tokens_per_expert.shape {num_local_tokens_per_expert.shape}')
             num_global_tokens_per_expert = (
-                gather_from_sequence_parallel_region(
+                gather_from_sequence_parallel_region( # 从tp_ep_group中进行gather
                     num_local_tokens_per_expert, group=self.tp_ep_group
                 )
                 .reshape(self.ep_size, self.tp_size, self.num_experts)
                 .transpose(0, 1)
             )
+            # print_single_rank(f'[rank {torch.distributed.get_rank()}] after gather num_global_tokens_per_expert.shape {num_global_tokens_per_expert.shape}')
             # with torch.no_grad():
             #     if torch.cuda.current_device() == 0:
             #         import os
@@ -515,14 +518,15 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
                 - Number of tokens per expert.
         """
         # Preprocess: Get the metadata for communication, permutation and computation operations.
-        self.hidden_shape = hidden_states.shape
-        self.probs = probs
-        self.routing_map = routing_map
+        self.hidden_shape = hidden_states.shape # [seq_len/origin_tp, bsz, hidden_size]
+        self.probs = probs # [seq_len/origin_tp*bsz, num_experts]
+        self.routing_map = routing_map # [seq_len/origin_tp*bsz, num_experts]
         assert probs.dim() == 2, "Expected 2D tensor for probs"
         assert routing_map.dim() == 2, "Expected 2D tensor for token2expert mask"
         assert routing_map.dtype == torch.bool, "Expected bool tensor for mask"
-        hidden_states = hidden_states.view(-1, self.hidden_shape[-1])
+        hidden_states = hidden_states.view(-1, self.hidden_shape[-1]) # [seq_len/origin_tp*bsz, hidden_size]
         tokens_per_expert = self.preprocess(self.routing_map)
+        # print_single_rank(f'[rank {torch.distributed.get_rank()}] tokens_per_expert.shape: {tokens_per_expert.shape}, device: {tokens_per_expert.device}')
 
         if self.shared_experts is not None:
             self.shared_experts.pre_forward_comm(hidden_states.view(self.hidden_shape))
@@ -531,7 +535,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
         tokens_per_expert = self._maybe_dtoh_and_synchronize(
             "before_permutation_1", tokens_per_expert
         )
-        self.hidden_shape_before_permute = hidden_states.shape
+        self.hidden_shape_before_permute = hidden_states.shape # [seq_len/origin_tp*bsz, hidden_size]
         permutated_local_input_tokens, self.reversed_local_input_permutation_mapping = permute(
             hidden_states,
             routing_map,
@@ -539,17 +543,22 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             fused=self.config.moe_permute_fusion,
             drop_and_pad=self.drop_and_pad,
         )
+        # print_single_rank(f'[rank {torch.distributed.get_rank()}] permutated_local_input_tokens.shape: {permutated_local_input_tokens.shape}, device: {permutated_local_input_tokens.device}')
+        # print_single_rank(f'[rank {torch.distributed.get_rank()}] self.reversed_local_input_permutation_mapping.shape: {self.reversed_local_input_permutation_mapping.shape}, device: {self.reversed_local_input_permutation_mapping.device}')
 
         # Perform expert parallel AlltoAll communication
         tokens_per_expert = self._maybe_dtoh_and_synchronize(
             "before_ep_alltoall", tokens_per_expert
         )
+        # 开始真正执行alltoall操作
         global_input_tokens = all_to_all(
             self.ep_group, permutated_local_input_tokens, self.output_splits, self.input_splits
         )
+        # print_single_rank(f'[rank {torch.distributed.get_rank()}] global_input_tokens.shape: {global_input_tokens.shape}')
         if self.shared_experts is not None:
             self.shared_experts.linear_fc1_forward_and_act(global_input_tokens)
 
+        # 同时使用了tp，则将global_input_tokens进行gather
         if self.tp_size > 1:
             if self.output_splits_tp is None:
                 output_split_sizes = None
@@ -558,6 +567,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             global_input_tokens = gather_from_sequence_parallel_region(
                 global_input_tokens, group=self.tp_group, output_split_sizes=output_split_sizes
             )
+            # print(f'[rank {torch.distributed.get_rank()}] because etp != 1, global_input_tokens.shape: {global_input_tokens.shape}')
 
         # Permutation 2: Sort tokens by local expert.
         tokens_per_expert = self._maybe_dtoh_and_synchronize(
@@ -638,14 +648,17 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             else:
                 input_split_sizes = self.output_splits_tp.tolist()
             # The precision of TP reduce_scatter should be the same as the router_dtype
+            # print(f'[DEBUG] because ETP != 1, probs.dtype: {self.probs.dtype}')
             hidden_states = reduce_scatter_to_sequence_parallel_region(
                 hidden_states.to(self.probs.dtype),
                 group=self.tp_group,
                 input_split_sizes=input_split_sizes,
             ).to(hidden_states.dtype)
+            # print(f'[DEBUG] because ETP != 1, combine hidden_states.dtype: {hidden_states.dtype}')
 
         # Perform expert parallel AlltoAll communication
         # hidden_states: [SEQL, H] -> [SEQL, H/TP]
+        # print(f'[DEBUG] all_to_all hidden_states.dtype: {hidden_states.dtype}')
         permutated_local_input_tokens = all_to_all(
             self.ep_group, hidden_states, self.input_splits, self.output_splits
         )

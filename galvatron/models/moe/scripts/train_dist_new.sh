@@ -4,13 +4,13 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # export NVTE_BATCH_MHA_P2P_COMM=1 # to force TransformerEngine to use batched send/recv for CP
 export NCCL_DEBUG=WARN
 
-ports=(`echo $METIS_WORKER_0_PORT | tr ',' ' '`)
-port=${ports[0]}
+# ports=(`echo $METIS_WORKER_0_PORT | tr ',' ' '`)
+# port=${ports[0]}
 export NUM_NODES=1
-export NUM_GPUS_PER_NODE=$ARNOLD_WORKER_GPU
-export MASTER_ADDR=$METIS_WORKER_0_HOST
-export MASTER_PORT=$port
-export NODE_RANK=`expr $ARNOLD_ID - 0`
+export NUM_GPUS_PER_NODE=8
+export MASTER_ADDR=localhost
+export MASTER_PORT=29500
+export NODE_RANK=0
 
 export OMP_NUM_THREADS=8
 export NCCL_DEBUG=WARN
@@ -32,8 +32,11 @@ LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
 TRAINER="train_dist.py"
-DATA_PATH=/mnt/bn/wyj-data-lq/lxy/dataset/wikitext/mixtral_text_document
-TOKENIZER_MODEL=/mnt/bn/wyj-data-lq/lxy/Mixtral-8x7B-v0.1
+# DATA_PATH=/mnt/bn/wyj-data-lq/lxy/dataset/wikitext/mixtral_text_document
+# TOKENIZER_MODEL=/mnt/bn/wyj-data-lq/lxy/Mixtral-8x7B-v0.1
+DATA_PATH=/home/pkuhetu/lxy/dataset/llama/my-llama2_text_document
+VOCAB_FILE=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.json
+TOKENIZER_MODEL=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.model
 
 MODEL_ARGS="
     --model_size mixtral-8x7b \
@@ -43,13 +46,13 @@ MODEL_ARGS="
     --set_experts_manually 0 \
     --vocab_size 32000 \
     --hidden_size 4096 \
-    --num_hidden_layers 8 \
+    --num_hidden_layers 4 \
     --num_attention_heads 32 \
-    --seq_length 2048"
+    --seq_length 1024"
 
 TRAIN_ARGS="
     --global_train_batch_size 64 \
-    --train-iters 20 \
+    --train-iters 30 \
     --eval-iters 1 \
     --lr 1.25e-6 \
     --lr-decay-style cosine \
@@ -64,13 +67,13 @@ TRAIN_ARGS="
     --dropout_prob 0.1 \
     --check_loss 0 \
     --profile 1 \
-    --async_grad_reduce 0 \
+    --async_grad_reduce 1 \
     --save_profiled_memory 0"
 
 DATA_ARGS="
     --data-path $DATA_PATH \
     --split 949,50,1 \
-    --tokenizer-type HuggingFaceTokenizer \
+    --tokenizer-type Llama2Tokenizer \
     --tokenizer-model ${TOKENIZER_MODEL}
 "
 
@@ -95,7 +98,7 @@ PARALLEL_ARGS="
     --global_tp_consec 1 \
     --global_ep_deg 8 \
     --global_tp_of_ep_deg 1 \
-    --sdp 1 \
+    --sdp 0 \
     --global_checkpoint 1 \
     --vocab_tp 8 \
     --chunks 8 \
@@ -104,7 +107,9 @@ PARALLEL_ARGS="
     --mixed_precision bf16 \
     --sequence-parallel \
     --use-flash-attn \
+    --moe_router_load_balancing_type sinkhorn \
     --initialize_on_meta 1"
     # --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_1nodes_8gpus_per_node_36GB_bf16_[tpconsec_off].json"
 
+# forced_uniform sinkhorn
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS} # ${CKPT_ARGS}
