@@ -170,17 +170,17 @@ class MoEAllGatherTokenDispatcher(MoETokenDispatcher):
             with torch.no_grad():
                 # [num_local_tokens, num_experts] -> [num_global_tokens, num_experts], where:
                 #     num_local_tokens=(S/TP)*B, num_global_tokens=S*B*EP
-                routing_map = gather_from_sequence_parallel_region(
+                routing_map = gather_from_sequence_parallel_region( # 在全局的TP*EP设备上进行routing_map
                     routing_map, group=self.tp_ep_group
                 )
 
             ## local_probs calculation
             # max_prob: [S/TP*B, num_experts] -> global_probs: [S*B*EP, num_experts]
-            probs = gather_from_sequence_parallel_region(probs, group=self.tp_ep_group)
+            probs = gather_from_sequence_parallel_region(probs, group=self.tp_ep_group) # 在全局的TP*EP设备上进行probs的gather
 
             # Note that this allgather spans the communication domain of TP*EP.
             #  [(S/TP)*B, H] -> [((S/TP)*B)*(TP*EP), H] = [S*B*EP, H]
-            hidden_states = gather_from_sequence_parallel_region(
+            hidden_states = gather_from_sequence_parallel_region( # 在全局的TP*EP设备上进行hidden_states的gather
                 hidden_states, group=self.tp_ep_group, use_global_buffer=True
             )
         self.hidden_shape_before_permute = hidden_states.shape
@@ -551,12 +551,15 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             "before_ep_alltoall", tokens_per_expert
         )
         # 开始真正执行alltoall操作
+        # print(f'[DEBUG] before all_to_all dispatch, permutated_local_input_tokens.shape: {permutated_local_input_tokens.shape}')
         global_input_tokens = all_to_all(
             self.ep_group, permutated_local_input_tokens, self.output_splits, self.input_splits
         )
         # print_single_rank(f'[rank {torch.distributed.get_rank()}] global_input_tokens.shape: {global_input_tokens.shape}')
         if self.shared_experts is not None:
             self.shared_experts.linear_fc1_forward_and_act(global_input_tokens)
+
+        # print(f'[DEBUG] rank[{torch.distributed.get_rank()}] after all_to_all dispatch, but before gather in tp groups, global_input_tokens.shape: {global_input_tokens.shape}, device: {global_input_tokens.device}')
 
         # 同时使用了tp，则将global_input_tokens进行gather
         if self.tp_size > 1:

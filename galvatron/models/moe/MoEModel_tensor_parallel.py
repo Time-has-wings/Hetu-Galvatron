@@ -193,22 +193,32 @@ class MoEMLP_tp(nn.Module):
             
     def forward(self, hidden_states, mlp_residual=None, probs=None, routing_map=None):
         if self.is_profile_mlp == False:
+
+            # if torch.distributed.get_rank() == 0:
+                # print(f'[DEBUG] layer_id {self.idx}')
+
+            # tokens_per_expert_before_all_to_all_and_all_gather = routing_map.sum(0).to(torch.int32)
+            # print(f'[rank{torch.distributed.get_rank()}], tokens_per_expert_before_all_to_all_and_all_gather: {tokens_per_expert_before_all_to_all_and_all_gather}')
+            
+
             (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(
                     hidden_states, probs, routing_map
                 )
             # print_single_rank(f'[rank{torch.distributed.get_rank()}], tokens_per_expert: {tokens_per_expert}', rank=torch.distributed.get_rank())
             # print_single_rank(f'[rank{torch.distributed.get_rank()}], dispatched_input.shape: {dispatched_input.shape}', rank=torch.distributed.get_rank())
+            # print(f'[DEBUG] rank[{torch.distributed.get_rank()}], layer_id{self.idx}, self.local_expert_indices: {self.local_expert_indices}, tokens_per_expert: {tokens_per_expert}')
+            # print(f'[DEBUG] layer_id{self.idx}, tokens_per_expert: {tokens_per_expert}')
+            print(f'[DEBUG] rank[{torch.distributed.get_rank()}], layer_id{self.idx}, tokens_per_expert: {tokens_per_expert}')
             expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
-
-            info = {}
-            if not hasattr(self, 'chunk'):
-                self.chunk = 0
-            else:
-                self.chunk += 1
-            info['chunk'] = self.chunk
-            info['layer_id'] = self.idx
-            info['token_num_per_expert_list'] = tokens_per_expert.cpu().tolist()
-            store_single_rank(info)
+            # info = {}
+            # if not hasattr(self, 'chunk'):
+            #     self.chunk = 0
+            # else:
+            #     self.chunk += 1
+            # info['chunk'] = self.chunk
+            # info['layer_id'] = self.idx
+            # info['token_num_per_expert_list'] = tokens_per_expert.cpu().tolist()
+            # store_single_rank(info)
 
             # info = {}
             # info["chunk"] = self.chunk

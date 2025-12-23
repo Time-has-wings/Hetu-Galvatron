@@ -1,5 +1,6 @@
 from .layer_cost import TimeCostModelBase
 from ..cost_model_args_optimize import EstimateTPTimeType
+from .layer_cost import MemoryCostModelBase
 
 class AttentionTimeCostModelOptimize(TimeCostModelBase):
     def estimate_tp_communication_time(self):
@@ -20,12 +21,12 @@ class AttentionTimeCostModelOptimize(TimeCostModelBase):
                     self.fwd_tp_communication_time = per_tp_message_size_in_MB * args.all_gather_fixed_dict[f'{self.tp_size}_1'] * 1 + per_tp_message_size_in_MB * args.reduce_scatter_fixed_dict[f'{self.tp_size}_1'] * 1
                     self.bwd_tp_communication_time = per_tp_message_size_in_MB * args.all_gather_fixed_dict[f'{self.tp_size}_1'] * 1
                     
-                    if self.checkpoint == False:
+                    if not self.checkpoint:
                         self.tp_communication_time = self.fwd_tp_communication_time + self.bwd_tp_communication_time
                     else:
                         self.tp_communication_time = self.fwd_tp_communication_time * 2 + self.bwd_tp_communication_time
                 else: # use allreduce
-                    raise NotImplemented('allreduce not implement')
+                    raise NotImplementedError('allreduce not implement')
             elif args.estimate_tp_time_type == EstimateTPTimeType.FIT:
                 if args.sequence_parallel:
                     dtype_size = 2 if args.mixed_precision else 4
@@ -44,9 +45,12 @@ class AttentionTimeCostModelOptimize(TimeCostModelBase):
                     self.fwd_tp_communication_time = per_operation_time * 2
                     self.bwd_tp_communication_time = per_operation_time * 1
                     
-                    if self.checkpoint == False:
+                    if not self.checkpoint:
                         self.tp_communication_time = self.fwd_tp_communication_time + self.bwd_tp_communication_time
                     else:
                         self.tp_communication_time = self.fwd_tp_communication_time * 2 + self.bwd_tp_communication_time
                 else: # use allreduce
-                    raise NotImplemented('allreduce not implement')
+                    raise NotImplementedError('allreduce not implement')
+                
+class AttentionMemoryCostModelOptimize(MemoryCostModelBase):
+    pass

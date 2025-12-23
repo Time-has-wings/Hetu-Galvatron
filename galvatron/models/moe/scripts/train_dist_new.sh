@@ -48,7 +48,7 @@ MODEL_ARGS="
     --hidden_size 4096 \
     --num_hidden_layers 4 \
     --num_attention_heads 32 \
-    --seq_length 1024"
+    --seq_length 4096"
 
 TRAIN_ARGS="
     --global_train_batch_size 64 \
@@ -96,10 +96,10 @@ PARALLEL_ARGS="
     --pp_deg 1 \
     --global_tp_deg 8 \
     --global_tp_consec 1 \
-    --global_ep_deg 8 \
-    --global_tp_of_ep_deg 1 \
+    --global_ep_deg 4 \
+    --global_tp_of_ep_deg 2 \
     --sdp 0 \
-    --global_checkpoint 1 \
+    --global_checkpoint 0 \
     --vocab_tp 8 \
     --chunks 8 \
     --pipeline_type pipedream_flush \
@@ -107,7 +107,7 @@ PARALLEL_ARGS="
     --mixed_precision bf16 \
     --sequence-parallel \
     --use-flash-attn \
-    --moe_router_load_balancing_type sinkhorn \
+    --moe_router_load_balancing_type none \
     --initialize_on_meta 1"
     # --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_1nodes_8gpus_per_node_36GB_bf16_[tpconsec_off].json"
 

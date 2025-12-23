@@ -83,3 +83,26 @@ if __name__ ==  '__main__':
     print('all cases done')
     for time_cost in time_cost_list:
         print(f'{time_cost:.1f}')
+
+
+    memory_cost_list = []
+    for case in cases:
+        global_batch_size = case["global_batch_size"]
+        chunks = case["chunks"]
+        attention_strategy:GalvatronStrategy = copy.deepcopy(case["strategy"])
+        attention_strategy.unit = 'attention'
+        ffn_strategy:GalvatronStrategy = copy.deepcopy(case["moe_strategy"])
+        ffn_strategy.unit = 'ffn'
+        ffn_strategy.is_moe = True
+        embedding_lmhead_strategy:GalvatronStrategy = copy.deepcopy(case["strategy"])
+        embedding_lmhead_strategy.unit = 'embedding_lmhead'
+        embedding_lmhead_strategy.checkpoint = False
+
+        print(f"\n=== Check Cost for Global_batch_size: {global_batch_size}, Chunks: {chunks}, attention_strategy: {attention_strategy}, ffn_strategy: {ffn_strategy}, embedding_lmhead_strategy: {embedding_lmhead_strategy} ===")
+        memory_cost = cost_model_handler.get_memory_cost_for_specific_strategy_moe(attention_strategy, ffn_strategy, embedding_lmhead_strategy, global_batch_size, chunks)
+        print(f'Memory Cost: {memory_cost}')
+        memory_cost_list.append(memory_cost)
+
+    print('all cases done')
+    for memory_cost in memory_cost_list:
+        print(f'{memory_cost:.1f}')

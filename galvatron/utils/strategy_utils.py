@@ -105,6 +105,7 @@ class GalvatronStrategy:
     cp_size: int = 1
     ep_size: int = 1
     tp_of_ep_size: int = 1
+    dp_of_ep_size: int = 1
     use_ulysses: bool = False
     dp_type: str = 'zero0' # ['zero0', 'zero2', 'zero3']
     checkpoint: bool = False
@@ -146,6 +147,9 @@ class GalvatronStrategy:
 
     @property
     def world_size(self):
+        if self.is_moe and self.unit == 'ffn':
+            return self.pp_size * self.ep_size * self.tp_of_ep_size * self.dp_of_ep_size
+
         if self.unit in ['all', 'attention']:
             return self.pp_size * self.tp_size * self.dp_size * self.cp_size
         elif self.unit == 'ffn':

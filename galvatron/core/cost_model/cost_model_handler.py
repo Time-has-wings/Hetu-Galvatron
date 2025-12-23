@@ -13,8 +13,8 @@ import re
 import logging
 from .cost_model_args_optimize import TrainArgsOptimize, ProfileModelArgsOptimize, ProfileHardwareArgsOptimize, UtilsArgsOptimize, VersionOptionArgsOptimize, EstimateTPTimeType
 from galvatron.utils.strategy_utils import GalvatronStrategy
-from .components.attention_cost import AttentionTimeCostModelOptimize
-from .components.ffn_cost import MoEFFNTimeCostModelOptimize, FFNTimeCostModelOptimize
+from .components.attention_cost import AttentionTimeCostModelOptimize, AttentionMemoryCostModelOptimize
+from .components.ffn_cost import MoEFFNTimeCostModelOptimize, FFNTimeCostModelOptimize, MoEFFNMemoryCostModelOptimize
 from .components.layer_cost import LayerTimeCostModelOptimize, LayerMemoryCostModelOptimize
 from .components.embedding_lmhead_cost import EmbeddingLMHeadTimeCostModelOptimize, EmbeddingLMHeadMemoryCostModelOptimize
 
@@ -144,8 +144,8 @@ class GalvatronCostModelHandler:
         elif args.profile_granularity == 'split':
             memory_path = self.memory_profiling_path()
             self.attention_param_memory_list, self.attention_act_memory_list, self.other_memory_pp_off, self.other_memory_pp_on = parse_memory_profile(memory_path[0], args.memory_profile_mode[0], self.num_layertype, self.seqlen_list, args.sequence_parallel)
-            if args.is_MoE == False: # TODO currently, don't parse the MoE memory,
-                self.ffn_param_memory_list, self.ffn_act_memory_list, _, _ = parse_memory_profile(memory_path[1], args.memory_profile_mode[1], self.num_layertype, self.seqlen_list, args.sequence_parallel)
+            # if args.is_MoE == False: # TODO currently, don't parse the MoE memory,
+            self.ffn_param_memory_list, self.ffn_act_memory_list, _, _ = parse_memory_profile(memory_path[1], args.memory_profile_mode[1], self.num_layertype, self.seqlen_list, args.sequence_parallel)
         else:
             raise ValueError("Unsupported profile granularity: %s"%(args.profile_granularity))
             
@@ -269,8 +269,8 @@ class GalvatronCostModelHandler:
                 else:
                     profile_ffn_args = ProfileModelArgsOptimize(
                         forward_computation_time=self.ffn_time_profiled_list[i],
-                        parameter_memory=None,
-                        tp_activation_per_bsz_dict=None,
+                        parameter_memory=self.ffn_param_memory_list[i],
+                        tp_activation_per_bsz_dict=self.ffn_act_memory_list[i],
                         other_time_profiled=self.other_time_profiled_list[0],
                         other_memory_pp_off=self.other_memory_pp_off,
                         other_memory_pp_on=self.other_memory_pp_on
@@ -453,6 +453,48 @@ class GalvatronCostModelHandler:
         else:
             raise NotImplemented("pp not implement")
 
+    def get_memory_cost_for_specific_strategy_moe(self, attention_strategy:GalvatronStrategy, ffn_strategy:GalvatronStrategy, embedding_lmhead_strategy:GalvatronStrategy, global_batch_size:int, chunks:int):
+        pp_size = attention_strategy.pp_size
+
+        # [Step 1]
+        attention_memory_cost_dict = [{} for _ in range(self.num_layertype)]
+        for layertype_id in range(self.num_layertype):
+            for stage_idx in range(pp_size):
+                memory_cost = self.get_memory_cost(global_batch_size, chunks, attention_strategy, layertype_id, stage_idx, detailed=True)
+                attention_memory_cost_dict[layertype_id][stage_idx] = memory_cost
+
+        moe_memory_cost_dict = [{} for _ in range(self.num_layertype)]
+        for layertype_id in range(self.num_layertype):
+            for stage_idx in range(pp_size):
+                memory_cost = self.get_memory_cost(global_batch_size, chunks, ffn_strategy, layertype_id, stage_idx, detailed=True)
+                moe_memory_cost_dict[layertype_id][stage_idx] = memory_cost
+
+        # [Step 2]
+        embedding_lmhead_memory_cost = self.get_memory_cost(global_batch_size, chunks, embedding_lmhead_strategy, detailed=True)
+        
+        # [Step 3]
+        if attention_strategy.pp_size == 1:
+            # [DEBUG]
+            model_states = embedding_lmhead_memory_cost['model_states_memory']['embedding'] + embedding_lmhead_memory_cost['model_states_memory']['lmhead']
+            model_states += attention_memory_cost_dict[0][0]['model_states_memory'] * self.layernum_list[0]
+            model_states += moe_memory_cost_dict[0][0]['model_states_memory'] * self.layernum_list[0]
+            print(f'[DEBUG] model_states is {model_states}')
+
+            fix_stage_idx = 0
+            memory_cost = embedding_lmhead_memory_cost['total_memory']['embedding'] + embedding_lmhead_memory_cost['total_memory']['lmhead']
+            for layertype_id in range(self.num_layertype):
+                memory_cost += attention_memory_cost_dict[layertype_id][fix_stage_idx]['total_memory'] * self.layernum_list[layertype_id]
+                memory_cost += moe_memory_cost_dict[layertype_id][fix_stage_idx]['total_memory'] * self.layernum_list[layertype_id]
+            
+            if attention_strategy.dp_type != 'zero0':
+                pytorch_context_memory = 1024 * 2
+            else:
+                pytorch_context_memory = 0
+            result = memory_cost + pytorch_context_memory
+            return result
+        else:
+            raise NotImplemented("pp not implement")
+
     def get_time_cost(self, global_batch_size, chunks, strategy:GalvatronStrategy, layertype_id=0):
         if strategy.unit == "all":
             time_cost = LayerTimeCostModelOptimize(
@@ -577,11 +619,45 @@ class GalvatronCostModelHandler:
                 chunks=chunks,
                 logger=self.logger,
                 train_args=self.train_args_list[0],
-                profile_model_args=self.profile_model_args_list[0],
+                profile_model_args=self.profile_model_args_list[0] if len(self.profile_model_args_list) > 0 else self.profile_attention_args_list[0],
                 version_option_args=self.version_option_args_list[0]
             ).get_memory_cost()
+        elif strategy.unit == 'attention':
+            memory_cost = AttentionMemoryCostModelOptimize(
+                    strategy=strategy,
+                    global_batch_size=global_batch_size,
+                    chunks=chunks,
+                    stage_idx=stage_idx,
+                    logger=self.logger,
+                    train_args=self.train_args_list[layertype_id],
+                    profile_model_args=self.profile_attention_args_list[layertype_id],
+                    version_option_args=self.version_option_args_list[layertype_id]
+                ).get_memory_cost()
+        elif strategy.unit == 'ffn':
+            if strategy.is_moe == False:
+                memory_cost = AttentionMemoryCostModelOptimize(
+                    strategy=strategy,
+                    global_batch_size=global_batch_size,
+                    chunks=chunks,
+                    stage_idx=stage_idx,
+                    logger=self.logger,
+                    train_args=self.train_args_list[layertype_id],
+                    profile_model_args=self.profile_ffn_args_list[layertype_id],
+                    version_option_args=self.version_option_args_list[layertype_id]
+                ).get_memory_cost()
+            else:
+                memory_cost = MoEFFNMemoryCostModelOptimize(
+                    strategy=strategy,
+                    global_batch_size=global_batch_size,
+                    chunks=chunks,
+                    stage_idx=stage_idx,
+                    logger=self.logger,
+                    train_args=self.train_args_list[layertype_id],
+                    profile_model_args=self.profile_ffn_args_list[layertype_id],
+                    version_option_args=self.version_option_args_list[layertype_id]
+                ).get_memory_cost()
         else:
-            memory_cost = 2
+            raise ValueError(f"layertype_id {layertype_id} not supported")
 
         if detailed == False:
             return memory_cost['total_memory']

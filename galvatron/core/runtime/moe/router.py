@@ -414,7 +414,7 @@ class TopKRouter(Router):
             scores, routing_map = self.seq_aux_loss_load_balancing(logits, bsz, seq_length)
         elif self.routing_type == 'forced_uniform':
             scores, routing_map = self.forced_uniform_load_balancing(logits)
-        elif self.routing_type == "none":
+        elif self.routing_type == "none" or self.routing_type is None or self.routing_type == 'None':
             # A naive top-k routing without load balancing
             scores, routing_map, _ = topk_softmax_with_capacity(
                 logits,

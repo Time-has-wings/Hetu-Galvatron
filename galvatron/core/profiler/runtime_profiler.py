@@ -158,6 +158,8 @@ class RuntimeProfiler(BaseProfiler):
                 print(f"[Profiled memory for rank {rank}]:")
                 for key, val in mem_dict.items():
                     print(f"\t{key}: {val:.2f} MB")
+                
+                print(f'\t{mem_dict["iter_5_before_forward"]:.2f}\t{mem_dict["iter_5_after_forward"]:.2f}\t{mem_dict["iter_5_after_backward"]}\t{mem_dict["iter_5_after_backward_max"]}')
 
                 # Save results if requested
                 if hasattr(args, "save_profiled_memory") and args.save_profiled_memory:

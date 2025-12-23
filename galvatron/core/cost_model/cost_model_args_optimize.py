@@ -1,8 +1,26 @@
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Optional, Union
 from enum import Enum
 from logging import Logger
 from typing import List
+
+@dataclass
+class ModelArgsOptimize:
+    hidden_size: int = 4096
+    n_kv_heads:int = 4
+    n_heads: int = 32
+
+    # head_dim = hidden_size // n_heads
+    # num_query_groups = n_heads // n_kv_heads
+
+    @property
+    def head_dim(self):
+        return self.hidden_size // self.n_heads
+    
+    @property
+    def num_query_groups(self):
+        return self.n_heads // self.n_kv_heads
+
 
 @dataclass
 class TrainArgsOptimize:
@@ -82,11 +100,11 @@ class VersionOptionArgsOptimize:
 
 class LogPrint:
     def __init__(self):
-        self.logger = None
+        self.logger:Logger = None
         self.class_name = self.__class__.__name__
         
     def logger_print(self, message):
-        if self.logger == None:
+        if self.logger is None:
             print(f'[{self.class_name}], {message}')
         else:
             self.logger.info(f'[{self.class_name}] {message}')

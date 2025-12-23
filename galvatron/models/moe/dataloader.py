@@ -19,6 +19,8 @@ from torch.utils.data import Dataset
 
 from galvatron.core.runtime.hybrid_parallel_config import get_chunks
 from galvatron.core.runtime.pipeline.utils import chunk_batch
+from datasets import Dataset as HFDataset
+from tqdm import tqdm
 
 
 def random_get_ltor_masks_and_position_ids(data):
@@ -102,7 +104,7 @@ def core_gpt_dataset_config_from_args(args):
 
     return GPTDatasetConfig(
         random_seed=args.seed,
-        sequence_length=args.seq_length,
+        sequence_length=args.seq_length, # 在此处传递了序列长度
         blend=blend,
         blend_per_split=blend_per_split,
         split=args.split,
@@ -208,3 +210,61 @@ def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):
 
     micro_lossmask.pop(0)
     return loss, averaged_loss[0]
+
+class RealDataLoaderForMoE(Dataset):
+    def __init__(self, args, device, dataset_size=2560 * 16, dataset="fix_length"):
+        self.vocab_size = args.vocab_size
+        self.sentence_length = args.seq_length
+        self.dataset_size = dataset_size
+        self.device = device
+        self.dataset = dataset
+
+        if self.dataset == 'fix_length':
+            self.input_ids = []
+            self.data_length = np.random.randint(1, self.sentence_length + 1, (self.dataset_size,))
+            for i in range(self.dataset_size):
+                sentence = np.random.randint(0, self.vocab_size, (self.sentence_length,))
+                sentence[self.data_length[i] :] = 0
+                mask = np.ones((self.sentence_length,))
+                mask[self.data_length[i] :] = 0
+
+                padding_sentence = np.zeros(self.sentence_length + 1, dtype=sentence.dtype)
+                padding_sentence[: self.sentence_length] = sentence
+                self.input_ids.append(padding_sentence)
+
+            self.input_ids = np.array(self.input_ids)
+        else:
+            parquet_path = args.dataset
+            self.parquet_data = HFDataset.from_parquet(parquet_path, num_proc=8, keep_in_memory=True)
+            
+            skip_num = 0
+            align_base = torch.distributed.get_world_size()
+            self.input_ids = []
+            for idx,_  in enumerate(tqdm(self.parquet_data)):
+                if idx >= self.dataset_size + skip_num:
+                    break
+                raw_token_length = self.parquet_data['raw_token_lengths'][idx]
+                base = raw_token_length // align_base
+                reminder = raw_token_length % align_base
+                padding_token_length = (base + 1) * align_base if reminder != 0 else base * align_base
+
+                if padding_token_length > self.seq_length:
+                    skip_num += 1
+                    continue
+                self.input_ids.append((idx, padding_token_length - raw_token_length))
+
+    def __len__(self):
+        return self.dataset_size
+
+    def __getitem__(self, idx):
+        if idx >= self.dataset_size:
+            raise IndexError
+
+        if self.dataset == 'fix_length':
+            input_ids = torch.LongTensor(self.input_ids[idx]).to(self.device)
+        else:
+            real_idx, padding_num = self.input_ids[idx]
+            input_ids = self.parquet_data['raw_encodings'][real_idx]
+            input_ids = input_ids + [2] * padding_num
+            input_ids = torch.LongTensor(input_ids).to(self.device)
+        return input_ids

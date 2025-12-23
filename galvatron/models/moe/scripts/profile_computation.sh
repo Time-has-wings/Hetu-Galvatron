@@ -4,12 +4,12 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # export NVTE_BATCH_MHA_P2P_COMM=1 # to force TransformerEngine to use batched send/recv for CP
 export NCCL_DEBUG=WARN
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=1
 export MASTER_ADDR=localhost
-export MASTER_PORT=29520
+export MASTER_PORT=29521
 export NODE_RANK=0
 
 export OMP_NUM_THREADS=8
@@ -38,38 +38,38 @@ MODEL_ARGS="
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_attention_heads 32 \
-    --seq_length 1024"
-
-# PROFILE_ARGS="
-#     --profile_mode batch \
-#     --profile_type computation \
-#     --profile_seq_length_list 1024 \
-#     --profile_min_batch_size 1 \
-#     --profile_max_batch_size 12 \
-#     --profile_batch_size_step 1 \
-#     --layernum_min 2 \
-#     --layernum_max 4 \
-#     --mixed_precision bf16 \
-#     --use-flash-attn \
-#     --sequence_parallel \
-#     --profile_flow_control all \
-#     --profile_unit attention"
+    --seq_length 2048"
 
 PROFILE_ARGS="
-    --profile_mode sequence \
+    --profile_mode batch \
     --profile_type computation \
-    --profile_batch_size 1 \
-    --profile_min_seq_length 512 \
-    --profile_max_seq_length 8192 \
-    --profile_seq_length_step 512 \
-    --layernum_min 1 \
-    --layernum_max 2 \
+    --profile_seq_length_list 2048 \
+    --profile_min_batch_size 1 \
+    --profile_max_batch_size 12 \
+    --profile_batch_size_step 1 \
+    --layernum_min 2 \
+    --layernum_max 4 \
     --mixed_precision bf16 \
     --use-flash-attn \
     --sequence_parallel \
     --profile_flow_control all \
-    --profile_unit mlp \
-"
+    --profile_unit mlp"
+
+# PROFILE_ARGS="
+#     --profile_mode sequence \
+#     --profile_type computation \
+#     --profile_batch_size 1 \
+#     --profile_min_seq_length 512 \
+#     --profile_max_seq_length 8192 \
+#     --profile_seq_length_step 512 \
+#     --layernum_min 1 \
+#     --layernum_max 2 \
+#     --mixed_precision bf16 \
+#     --use-flash-attn \
+#     --sequence_parallel \
+#     --profile_flow_control all \
+#     --profile_unit mlp \
+# "
 
 # models in flash_attn cannot use fp32 without flash_attn
 # PROFILE_ARGS="

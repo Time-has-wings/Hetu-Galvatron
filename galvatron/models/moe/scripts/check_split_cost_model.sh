@@ -2,7 +2,7 @@ export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
 
 MODEL_SIZE="mixtral-8x7b"
-SEQ=1024
+SEQ=2048
 IS_MOE=1
 
 MODEL_ARGS="

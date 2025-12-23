@@ -14,8 +14,8 @@ if __name__ == "__main__":
 
     if args.profile_unit == "all":
         raise ValueError("Profiling all layers is not supported for MoE models.")
-    elif args.profile_unit == "mlp" and args.profile_type == "memory":
-        raise NotImplementedError("Memory profiling for MLP layer is not supported now.")
+    # elif args.profile_unit == "mlp" and args.profile_type == "memory":
+    #     raise NotImplementedError("Memory profiling for MLP layer is not supported now.")
     
     profiler.launch_profiling_scripts()
     profiler.process_profiled_data()
