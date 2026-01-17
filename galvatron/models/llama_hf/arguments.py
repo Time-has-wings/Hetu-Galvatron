@@ -1,6 +1,6 @@
 import argparse
 
-def model_args(parser):
+def model_args(parser:argparse.ArgumentParser):
     group = parser.add_argument_group(title="Model Arguments")
 
     group.add_argument(
@@ -28,6 +28,10 @@ def model_args(parser):
     group.add_argument("-s", "--seq_length", type=int, default=128, help="Maximum sequence len")
     group.add_argument("--vocab_size", type=int, default=30522, help="Total number of vocab")
     group.add_argument("--max_predictions_per_seq", type=int, default=20)
+    
+    group.add_argument("--dataset", type=str, default="fix_length")
+    group.add_argument("--use_pack", type=int, default=0, help="Use pack for dataloader collate function. When varlen_training is 1, use_pack must be 1")
+    group.add_argument("--varlen_training", type=int, default=0, help="Use variable length training")
     return parser
 
 

@@ -547,6 +547,8 @@ class Attention(MegatronModule, ABC):
         attention_bias: Optional[Tensor] = None,
         packed_seq_params: Optional[PackedSeqParams] = None,
         sequence_len_offset: Optional[int] = None,
+        cu_seqlens: Optional[Tensor] = None,
+        max_seqlen: Optional[int] = None,
         *,
         inference_params: Optional[BaseInferenceContext] = None,
     ) -> Tuple[Tensor, Tensor]:
@@ -713,14 +715,21 @@ class Attention(MegatronModule, ABC):
                             packed_seq_params=packed_seq_params,
                         )
                     else:
-                        q, k, v = [
-                            rearrange(x, "s b ... -> b s ...").contiguous() for x in (query, key, value)
-                        ]
+                        if packed_seq_params is not None:
+                            # THD format: [total_tokens, num_heads, head_dim]
+                            # Convert to BSHD format: [batch_size=1, seq_len=total_tokens, num_heads, head_dim]
+                            q = query.unsqueeze(0)  # [total_tokens, num_heads, head_dim] -> [1, total_tokens, num_heads, head_dim]
+                            k = key.unsqueeze(0)
+                            v = value.unsqueeze(0)
+                        else:
+                            q, k, v = [
+                                rearrange(x, "s b ... -> b s ...").contiguous() for x in (query, key, value)
+                            ]
                         if not self.sequence_parallel:
                             with tensor_parallel.get_cuda_rng_tracker().fork():
                                 core_attn_out = self.flash_attention(q, k, v)
                         else:
-                            core_attn_out = self.flash_attention(q, k, v)
+                            core_attn_out = self.flash_attention(q, k, v, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
                         core_attn_out = rearrange(core_attn_out, "b s h d -> s b (h d)").contiguous()
                 else:
                     if self.use_flash_attn:

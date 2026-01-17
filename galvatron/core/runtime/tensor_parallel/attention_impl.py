@@ -262,7 +262,7 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
             raise ImportError("einops is not installed, please install with pip install einops")
 
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v, cu_seqlens=None, max_seqlen=None):
         """Implements the multihead softmax attention.
         Arguments
         ---------
@@ -272,37 +272,30 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
         assert all((i.is_cuda for i in (q, k, v)))
 
-        batch_size, seqlen_q = q.shape[0], q.shape[1]
-        seqlen_k = k.shape[1]
-
-        q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
-        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
+        if cu_seqlens is not None:
+            batch_size = 1
+            # Input is now always in BSHD format: [batch_size=1, seq_len, num_heads, head_dim]
+            # Convert to format expected by flash_attn_unpadded_func: [total_tokens, num_heads, head_dim]
+            q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
+            cu_seqlens_q = cu_seqlens.to(dtype=torch.int32, device=q.device)
+            cu_seqlens_k = cu_seqlens.to(dtype=torch.int32, device=k.device)
+            seqlen_k = max_seqlen
+            seqlen_q = max_seqlen
+        else:
+            batch_size, seqlen_q = q.shape[0], q.shape[1]
+            seqlen_k = k.shape[1]
+            q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
+            cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
+            if seqlen_k == seqlen_q:
+                cu_seqlens_k = cu_seqlens_q
+            else:
+                cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=k.device)
 
         is_causal = self.causal
-        if seqlen_k == seqlen_q:
-            cu_seqlens_k = cu_seqlens_q
-        else:
-            cu_seqlens_k = torch.arange(
-                0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=k.device
-            )
         if self.training:
             dropout_p = self.dropout_p
         else:
             dropout_p = 0
-        # if self.training:
-        #     # during training q,k,v always have same seqlen
-        #     assert seqlen_k == seqlen_q
-
-        #     is_causal = self.causal
-        #     cu_seqlens_k = cu_seqlens_q
-        #     dropout_p = self.dropout_p
-        # else:
-        #     # turn off FA causal mask after first inference autoregressive iteration
-        #     # only on first autoregressive step q,k,v have same seqlen
-        #     is_causal = seqlen_q == seqlen_k
-        #     cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32,
-        #                 device=q.device)
-        #     dropout_p = 0
 
         output = flash_attn_unpadded_func(
             q,
@@ -317,6 +310,7 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
             causal=is_causal,
         )
 
+        # Convert output from [total_tokens, num_heads, head_dim] back to [batch_size, seq_len, num_heads, head_dim]
         output = rearrange(output, "(b s) ... -> b s ...", b=batch_size)
         return output
     

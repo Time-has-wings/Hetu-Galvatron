@@ -30,10 +30,12 @@ from .grad_reduce import (
     _allreduce_word_embedding_no_pipeline,
     _send_backward_hook,
 )
-from .utils import *
+# from .utils import *
+from .utils import chunk_batch, chunk_dict, chunk_input_ids, chunk_kwargs
+from galvatron.core.runtime.utils import get_batch_size
 
 Shape = Union[List[int], torch.Size]
-
+from loguru import logger
 
 def forward_step_function(loss_func, **kwargs):
     def forward_step(inputs, model):
@@ -43,6 +45,13 @@ def forward_step_function(loss_func, **kwargs):
             outputs = model(inputs, **kwargs)
         return outputs, loss_func
 
+    return forward_step
+
+def forward_step_function_next(loss_func, **kwargs):
+    def forward_step(input_ids:torch.Tensor, model):
+        assert isinstance(input_ids, torch.Tensor), f'input_ids must be a torch.Tensor, but got {type(input_ids)}'
+        output_tensor = model(input_ids, **kwargs)
+        return output_tensor, loss_func
     return forward_step
 
 
@@ -312,67 +321,61 @@ class PipelineParallel(nn.Module):
         return tensor_shape, tensor_shape_last
 
     def no_pipeline_forward_backward(
-        self,
-        batch,
-        loss_func,
-        forward_only=False,
-        profiler=None,
-        iter=0,
-        **kwargs,
+        self, 
+        input_ids:torch.Tensor, 
+        loss_func, 
+        forward_only:bool=False, 
+        profiler=None, 
+        iter=0, 
+        **kwargs
     ):
-        """Run no pipeline method.
+        # [Step 0] check
+        assert 'cu_seqlens' in kwargs, f'cu_seqlens must be in kwargs, but got {kwargs.keys()}'
 
-        Returns dictionary with losses.
-        """
+        # [Step 1] adjust chunks
+        local_batch_size = get_batch_size(input_ids, kwargs.get('cu_seqlens'))
+        if local_batch_size % self.chunks != 0:
+            print(f'[Warning] [rank{self.global_rank}] The local batch size is not divisible by chunks, the results may be skewed. local_batch_size: {local_batch_size}, chunks: {self.chunks}')
+        if local_batch_size < self.chunks:
+            original_chunks = self.chunks
+            self.chunks = local_batch_size
+            print(f'[Warning] [rank{self.global_rank}] The local batch size ({local_batch_size}) is less than chunks ({original_chunks}), chunks has been adjusted from {original_chunks} to {self.chunks}')
+        
+        # [Step 2] chunk input_ids and kwargs
+        micro_input_ids:List[torch.Tensor] = chunk_input_ids(input_ids, self.chunks, kwargs.get('cu_seqlens'))
+        micro_kwargs:List[dict] = chunk_kwargs(kwargs, self.chunks)
+
+        # [Step 3] prepare for foward_backward
         model = self.model_cur_stage
-
-        # forward_step_func = forward_step_function(loss_func,**kwargs)
-        # Chunk input batch into microbatches
-        if batch[0][0].shape[0] % self.chunks != 0:
-            if self.global_rank == 0:
-                print("[Warning]The global batch size is not divisible by chunks, the results may be skewed.")
-        micro_kwargs = chunk_dict(kwargs, self.chunks)
-        microbatches = [chunk_batch(batch[0], self.chunks), chunk_batch(batch[1], self.chunks)]
-        self.real_chunks = len(microbatches[0])
-        if self.chunks != self.real_chunks and self.chunk_warning:
-            if self.global_rank == 0:
-                print(
-                    "\nWarning from PipelineParallel Module: Real chunks is %d !" % self.real_chunks,
-                    "Microbatch sizes is",
-                    [m[0][0].shape[0] for m in microbatches],
-                )
-                print()
-                self.chunk_warning = False
-
-        num_microbatches = self.real_chunks
-        if num_microbatches > 1 and self.async_grad_reduce:
+        if self.chunks > 1 and self.async_grad_reduce:
             enter_no_sync_context(model)
 
+        # [Step 4] forward_backward
         losses_reduced = []
-
         self.set_last_batch(False)
-
-        for i in range(num_microbatches):
-            if i == num_microbatches - 1:
+        for i in range(self.chunks):
+            if i == self.chunks - 1:
                 self.set_last_batch(True)
-            cur_microbatch = [microbatches[0][i], microbatches[1][i]]
-            output_tensor = self.forward_step(
-                forward_step_function(loss_func, **micro_kwargs[i]),
-                # forward_step_func,
-                cur_microbatch,
-                model,
-                None,
-                losses_reduced,
+
+            cur_input_ids = micro_input_ids[i]
+            loss = self.forward_step_next(
+                forward_step_func=forward_step_function_next(loss_func, **micro_kwargs[i]),
+                input_ids=cur_input_ids,
+                model=model,
+                input_tensor=None,
+                losses_reduced=losses_reduced,
             )
-            if profiler is not None and i == num_microbatches - 1:
+            
+            if profiler is not None and i == self.chunks - 1:
                 profiler.profile_memory(iter, "After Forward")
 
             if forward_only:
                 continue
-            input_tensor_grad = self.backward_step(
-                None,
-                output_tensor,
-                None,
+
+            _ = self.backward_step_next(
+                input_tensor=None,
+                output_tensor=loss,
+                output_tensor_grad=None,
             )
 
         if forward_only:
@@ -381,7 +384,8 @@ class PipelineParallel(nn.Module):
                     m._exec_order_data.next_iter()
             return losses_reduced
 
-        if num_microbatches > 1 and self.async_grad_reduce:
+        # [Step 5] exit no sync context and reduce gradients
+        if self.chunks > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
 
@@ -390,6 +394,242 @@ class PipelineParallel(nn.Module):
             self.finalize_wte_grads_func()
 
         return losses_reduced
+
+    def pipedream_flush_forward_backward_next(self, input_ids:torch.Tensor, loss_func, forward_only=False, **kwargs):
+        """Run non-interleaved 1F1B schedule, with communication between pipeline
+        stages.
+
+        Returns dictionary with losses if the last stage, empty dict otherwise."""
+        # [Step 0] check
+        assert 'cu_seqlens' in kwargs, f'cu_seqlens must be in kwargs, but got {kwargs.keys()}'
+        assert self.group_size > 1, f'group_size must be greater than 1, but got {self.group_size}'
+
+        # [Step 1] adjust chunks
+        local_batch_size = get_batch_size(input_ids, kwargs.get('cu_seqlens'))
+        if local_batch_size % self.chunks != 0:
+            print(f'[Warning] [rank{self.global_rank}] The local batch size is not divisible by chunks, the results may be skewed. local_batch_size: {local_batch_size}, chunks: {self.chunks}')
+        if local_batch_size < self.chunks:
+            original_chunks = self.chunks
+            self.chunks = local_batch_size
+            print(f'[Warning] [rank{self.global_rank}] The local batch size ({local_batch_size}) is less than chunks ({original_chunks}), chunks has been adjusted from {original_chunks} to {self.chunks}')
+
+        # [Step 2] chunk input_ids and kwargs
+        micro_input_ids:List[torch.Tensor] = chunk_input_ids(input_ids, self.chunks, kwargs.get('cu_seqlens'))
+        micro_kwargs:List[dict] = chunk_kwargs(kwargs, self.chunks)
+
+        # [Step 3] prepare for forward_backward
+        model = self.model_cur_stage
+        if self.chunks > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
+
+        # TODO
+        # Update stage_input_tensor_shape with correct microbatch_size
+        if self.is_pipeline_first_stage():
+            self.stage_input_tensor_shape = self.stage_input_tensor_shape_last = [None]
+        else:
+            self.stage_input_tensor_shape, self.stage_input_tensor_shape_last = self.update_tensor_shape(
+                micro_input_ids,
+                self.dp_size_input,
+                self.dp_size_prev_stage,
+                self.tp_size_prev_stage,
+                self.sp_size_prev_stage,
+                self.template_stage_input_tensor_shape,
+                self.cp_size_prev_stage,
+            )
+
+        # Update stage_output_tensor_shape with correct microbatch_size
+        if self.is_pipeline_last_stage():
+            self.stage_output_tensor_shape = self.stage_output_tensor_shape_last = [None]
+        else:
+            self.stage_output_tensor_shape, self.stage_output_tensor_shape_last = self.update_tensor_shape(
+                micro_input_ids,
+                self.dp_size_input,
+                self.dp_size_cur_stage,
+                self.tp_size_cur_stage,
+                self.sp_size_cur_stage,
+                self.template_stage_output_tensor_shape,
+                self.cp_size_cur_stage,
+            )
+    
+        # [Step 4] forward_backward
+        input_tensors = []
+        output_tensors = []
+        losses_reduced = []
+        fwd_num, bwd_num = 0, 0
+        if self.info:
+            print("rank %d" % self.global_rank, "start warmup")
+            print("rank %d" % self.global_rank, "num_warmup_microbatches", num_warmup_microbatches)
+
+        # [Step 4.1] warmup
+        num_warmup_microbatches = self.group_size - self.group_rank - 1
+        num_warmup_microbatches = min(num_warmup_microbatches, self.chunks)
+        num_microbatches_remaining = self.chunks - num_warmup_microbatches
+
+        self.set_last_batch(False)
+        for i in range(num_warmup_microbatches):
+            recv_tensor_shapes_fwd = self.stage_input_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_input_tensor_shape
+            send_tensor_shapes_fwd = self.stage_output_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_output_tensor_shape
+            recv_tensor_dtypes = self.stage_input_tensor_dtype
+            send_tensor_dtypes = self.stage_output_tensor_dtype
+
+            input_tensor = self.recv_forward_multi(tensor_shapes=recv_tensor_shapes_fwd, dtypes=recv_tensor_dtypes)
+
+            cur_input_ids = micro_input_ids[i]
+            output_tensor = self.forward_step_next(
+                forward_step_func=forward_step_function_next(loss_func, **micro_kwargs[i]),
+                input_ids=cur_input_ids,
+                model=model,
+                input_tensor=input_tensor,
+                loss_reduced=losses_reduced,
+            )
+
+            fwd_num += 1
+            self.send_forward_multi(output_tensor, tensor_shapes=send_tensor_shapes_fwd, dtypes=send_tensor_dtypes)
+
+            if not forward_only:
+                input_tensors.append(input_tensor)
+                output_tensors.append(output_tensor)
+
+        if self.info:
+            print("rank %d" % self.global_rank, "finish warmup")
+
+        # [Step 4.2] Run 1F1B in steady state.
+        if self.info:
+            print("rank %d" % self.global_rank, "start 1f1b")
+            print("rank %d" % self.global_rank, "num_microbatches_remaining", num_microbatches_remaining)
+        # Before running 1F1B, need to receive first forward tensor.
+        # If all microbatches are run in warmup / cooldown phase, then no need to
+        # receive this tensor here.
+        if num_microbatches_remaining > 0:
+            recv_tensor_shapes_fwd = self.stage_input_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_input_tensor_shape
+            recv_tensor_dtypes = self.stage_input_tensor_dtype
+            input_tensor = self.recv_forward_multi(tensor_shapes=recv_tensor_shapes_fwd, dtypes=recv_tensor_dtypes)
+
+        for i in range(num_microbatches_remaining):
+            recv_tensor_shapes_fwd = self.stage_input_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_input_tensor_shape
+            send_tensor_shapes_fwd = self.stage_output_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_output_tensor_shape
+            recv_tensor_shapes_bwd = self.stage_input_tensor_shape_last if bwd_num == self.chunks - 1 else self.stage_input_tensor_shape
+            send_tensor_shapes_bwd = self.stage_output_tensor_shape_last if bwd_num == self.chunks - 1 else self.stage_output_tensor_shape
+            recv_tensor_dtypes = self.stage_input_tensor_dtype
+            send_tensor_dtypes = self.stage_output_tensor_dtype
+
+            last_iteration = True if i == num_microbatches_remaining - 1 else False
+
+            cur_input_ids = micro_input_ids[i + num_warmup_microbatches]
+            output_tensor = self.forward_step_next(
+                forward_step_func=forward_step_function_next(loss_func, **micro_kwargs[i + num_warmup_microbatches]),
+                input_ids=cur_input_ids,
+                model=model,
+                input_tensor=input_tensor,
+                loss_reduced=losses_reduced,
+            )
+            fwd_num += 1
+
+            if forward_only:
+                self.send_forward_multi(output_tensor, tensor_shapes=send_tensor_shapes_fwd, dtypes=send_tensor_dtypes)
+                if not last_iteration:
+                    input_tensor = self.recv_forward_multi(tensor_shapes=recv_tensor_shapes_fwd, dtypes=recv_tensor_dtypes)
+            else:
+                output_tensor_grad = self.send_forward_recv_backward_multi(
+                    output_tensor,
+                    tensor_shapes=send_tensor_shapes_bwd,
+                    dtypes=send_tensor_dtypes,
+                    tensor_shapes_send=send_tensor_shapes_fwd,
+                )
+                recv_tensor_shapes_fwd = self.stage_input_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_input_tensor_shape
+                send_tensor_shapes_fwd = self.stage_output_tensor_shape_last if fwd_num == self.chunks - 1 else self.stage_output_tensor_shape
+                # # if send and recv is executed sequentially, dead lock will be caused!
+                # self.send_forward_multi(output_tensor, tensor_shapes=send_tensor_shapes_fwd)
+                # output_tensor_grad = self.recv_backward_multi(tensor_shapes=send_tensor_shapes_bwd)
+
+                # Add input_tensor and output_tensor to end of list, then pop from the
+                # start of the list for backward pass.
+                input_tensors.append(input_tensor)
+                output_tensors.append(output_tensor)
+
+                # Pop input_tensor and output_tensor from the start of the list for the backward pass.
+                input_tensor = input_tensors.pop(0)
+                output_tensor = output_tensors.pop(0)
+
+                # Add to unshard param in backward (for zero3 with no sync context)
+                if self.chunks > 1:
+                    if version_major > 1:
+                        if version_minor > 0:
+                            for m in model.modules():
+                                if isinstance(m, FSDP):
+                                    if hasattr(m, "_handle"):
+                                        if m._handle != None:
+                                            m._handle._needs_pre_backward_unshard = True
+
+                input_tensor_grad = self.backward_step(input_tensor=input_tensor, output_tensor=output_tensor, output_tensor_grad=output_tensor_grad)
+                bwd_num += 1
+
+                if last_iteration:
+                    input_tensor = None
+                    self.send_backward_multi(input_tensor_grad, tensor_shapes=recv_tensor_shapes_bwd, dtypes=recv_tensor_dtypes)
+                else:
+                    input_tensor = self.send_backward_recv_forward_multi(
+                        input_tensor_grad,
+                        tensor_shapes=recv_tensor_shapes_fwd,
+                        dtypes=recv_tensor_dtypes,
+                        tensor_shapes_send=recv_tensor_shapes_bwd,
+                    )
+                    # # if send and recv is executed sequentially, dead lock will be caused!
+                    # self.send_backward_multi(input_tensor_grad, tensor_shapes=recv_tensor_shapes_bwd)
+                    # input_tensor = self.recv_forward_multi(tensor_shapes=recv_tensor_shapes_fwd)
+
+        if self.info:
+            print("rank %d" % self.global_rank, "finish 1f1b")
+
+        # [Step 4.3] cooldown
+        if self.info:
+            print("rank %d" % self.global_rank, "start cooldown")
+            print("rank %d" % self.global_rank, "num_warmup_microbatches", num_warmup_microbatches)
+
+        # Run cooldown backward passes.
+        if not forward_only:
+            for i in range(num_warmup_microbatches):
+                if i == num_warmup_microbatches - 1:
+                    self.set_last_batch(True)
+                input_tensor = input_tensors.pop(0)
+                output_tensor = output_tensors.pop(0)
+
+                recv_tensor_shapes_bwd = self.stage_input_tensor_shape_last if bwd_num == self.chunks - 1 else self.stage_input_tensor_shape
+                send_tensor_shapes_bwd = self.stage_output_tensor_shape_last if bwd_num == self.chunks - 1 else self.stage_output_tensor_shape
+                recv_tensor_dtypes = self.stage_input_tensor_dtype
+                send_tensor_dtypes = self.stage_output_tensor_dtype
+
+                output_tensor_grad = self.recv_backward_multi(tensor_shapes=send_tensor_shapes_bwd, dtypes=send_tensor_dtypes)
+
+                # Add to unshard param in backward (for zero3 with no sync context)
+                if self.chunks > 1:
+                    if version_major > 1:
+                        if version_minor > 0:
+                            for m in model.modules():
+                                if isinstance(m, FSDP):
+                                    if hasattr(m, "_handle"):
+                                        if m._handle != None:
+                                            m._handle._needs_pre_backward_unshard = True
+
+                input_tensor_grad = self.backward_step(input_tensor=input_tensor, output_tensor=output_tensor, output_tensor_grad=output_tensor_grad)
+                bwd_num += 1
+
+                self.send_backward_multi(input_tensor_grad, tensor_shapes=recv_tensor_shapes_bwd, dtypes=recv_tensor_dtypes)
+
+        if self.info:
+            print("rank %d" % self.global_rank, "finish cooldown")
+
+        # [Step 5] exit no sync context and reduce gradients
+        if self.chunks > 1 and self.async_grad_reduce:
+            exit_no_sync_context(model)
+            fsdp_reduce_gradients(model)
+
+        if self.finalize_wte_grads and not forward_only:
+            torch.distributed.barrier()
+            self.finalize_wte_grads_func()
+
+        return losses_reduced
+
 
     def pipedream_flush_forward_backward(
         self,
@@ -911,37 +1151,65 @@ class PipelineParallel(nn.Module):
 
     # forward & backward step
     # ---------------------------------------
-    def forward_step(self, forward_step_func, batch, model, input_tensor, losses_reduced, loss_stage=False):
-        """Forward step for passed-in model.
+    # def forward_step(self, forward_step_func, batch, model, input_tensor, losses_reduced, loss_stage=False):
+    #     """Forward step for passed-in model.
 
-        If first stage, input tensor is obtained from data_iterator, otherwise
-        passed-in input_tensor is used.
+    #     If first stage, input tensor is obtained from data_iterator, otherwise
+    #     passed-in input_tensor is used.
 
-        Returns output tensor."""
+    #     Returns output tensor."""
 
-        input_tensor = self.to_list(input_tensor)
+    #     input_tensor = self.to_list(input_tensor)
 
-        for x in input_tensor:
-            if x is not None and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
-                x.requires_grad = True
+    #     for x in input_tensor:
+    #         if x is not None and x.dtype in [torch.float32, torch.float16, torch.bfloat16]:
+    #             x.requires_grad = True
 
-        if input_tensor[0] is None:
-            output_tensor, loss_func = forward_step_func(batch[0], model)
-        else:
+    #     if input_tensor[0] is None:
+    #         output_tensor, loss_func = forward_step_func(batch[0], model)
+    #     else:
+    #         output_tensor, loss_func = forward_step_func(input_tensor, model)
+
+    #     if self.is_pipeline_last_stage():
+    #         output_tensor = self.to_list(output_tensor)
+    #         if self.require_loss:
+    #             output_tensor, loss_reduced = loss_func(batch[1], output_tensor)
+    #         loss = output_tensor
+    #         if self.require_loss:
+    #             # from loguru import logger as loguru_logger
+    #             # loguru_logger.info(f'divide by {self.real_chunks}')
+    #             # print(f'divide by {self.real_chunks}')
+    #             output_tensor = loss / self.real_chunks
+    #         losses_reduced.append(loss_reduced)
+    #         return output_tensor
+
+    #     output_tensor = self.to_list(output_tensor)
+    #     return output_tensor
+
+    def forward_step_next(self, forward_step_func, input_ids:torch.Tensor, model, losses_reduced:List[torch.Tensor], input_tensor:torch.Tensor=None):
+        """
+            Forward step for passed-in model.
+            If first stage, input tensor is obtained from data_iterator, otherwise passed-in input_tensor is used.
+            If last stage, return loss tensor, otherwise return output tensor for next stage.
+        """
+
+        if input_tensor is not None:
+            # pipeline forward step
+            input_tensor.requires_grad = True
             output_tensor, loss_func = forward_step_func(input_tensor, model)
+        else:
+            # no pipeline forward step (first stage or no pipeline)
+            output_tensor, loss_func = forward_step_func(input_ids, model)
 
         if self.is_pipeline_last_stage():
-            output_tensor = self.to_list(output_tensor)
-            if self.require_loss:
-                output_tensor, loss_reduced = loss_func(batch[1], output_tensor)
-            loss = output_tensor
-            if self.require_loss:
-                output_tensor = loss / self.real_chunks
+            # The first loss is used for backward propagation on this device.
+            # The second loss is the globally reduced loss, used for printing.
+            loss, loss_reduced = loss_func(output_tensor)
             losses_reduced.append(loss_reduced)
+            return loss
+        else:
+            # Return output tensor for next stage.
             return output_tensor
-
-        output_tensor = self.to_list(output_tensor)
-        return output_tensor
 
     def check_finish_backward(self, require_grad_param_num):
         self.finish_backward_param_num += 1
@@ -987,65 +1255,20 @@ class PipelineParallel(nn.Module):
 
         return input_tensor_grad[0] if unwrap_input_tensor_grad else input_tensor_grad
 
-    # def backward_step(self, input_tensor, output_tensor, output_tensor_grad, recv_tensor_shapes, recv_tensor_dtypes, recv_tensor_shapes_fwd = None, last_iteration = None):
-    #     """Backward step through passed-in output tensor.
+    def backward_step_next(self, input_tensor:torch.Tensor, output_tensor:torch.Tensor, output_tensor_grad:torch.Tensor):
+        """
+            Backward step through passed-in output tensor.
+            If first stage, input tensor is None, otherwise is the input tensor of this stage.
+            If last stage, output_tensor_grad is None, otherwise is the gradient of loss with respect to output tensor of this stage.
+            Returns gradient of loss with respect to input tensor of this stage (None if first stage)
+        """
 
-    #     If last stage, output_tensor_grad is None, otherwise gradient of loss
-    #     with respect to stage's output tensor.
+        if input_tensor is not None:
+            input_tensor.retain_grad()
+        
+        torch.autograd.backward(tensors=output_tensor, grad_tensors=output_tensor_grad)
 
-    #     Returns gradient of loss with respect to input tensor (None if first
-    #     stage)."""
-
-    #     # Retain the grad on the input_tensor.
-    #     unwrap_input_tensor_grad = not isinstance(input_tensor, list)
-    #     if unwrap_input_tensor_grad:
-    #         input_tensor = [input_tensor]
-    #     input_tensor = [None if t is None or not t.requires_grad else t for t in input_tensor]
-    #     require_grad_param_num = 0
-    #     position = 0
-    #     self.finish_backward_param_num = 0
-    #     for x in input_tensor:
-    #         if x is not None:
-    #             require_grad_param_num += 1
-    #     input_tensor_grad = [None for t in input_tensor]
-    #     hook_list = []
-    #     for x in input_tensor:
-    #         if x is not None:
-    #             x.retain_grad()
-    #             h = x.register_hook(
-    #                 functools.partial(_send_backward_hook, input_tensor_grad, position,
-    #                                   functools.partial(self.send_backward_multi, tensor_shapes=recv_tensor_shapes, dtypes=recv_tensor_dtypes),
-    #                                   functools.partial(self.check_finish_backward,require_grad_param_num),
-    #                                   functools.partial(self.send_backward_recv_forward_multi(tensor_shapes=recv_tensor_shapes_fwd, dtypes=recv_tensor_dtypes, tensor_shapes_send=recv_tensor_shapes),
-    #                                   last_iteration)
-    #             )
-    #             hook_list.append(h)
-    #             position += 1
-
-    # if not isinstance(output_tensor, list):
-    #     output_tensor = [output_tensor]
-    # if not isinstance(output_tensor_grad, list):
-    #     output_tensor_grad = [output_tensor_grad]
-
-    # # Backward pass.
-    # output_tensor_, output_tensor_grad_ = [], []
-    # for t, g in zip(output_tensor, output_tensor_grad):
-    #     if t is not None and t.requires_grad:
-    #         output_tensor_.append(t)
-    #         output_tensor_grad_.append(g)
-    # torch.autograd.backward(output_tensor_, grad_tensors=output_tensor_grad_)
-
-    # for h in hook_list:
-    #     h.remove()
-
-    # Collect the grad of the input_tensor.
-    # input_tensor_grad = [None]
-    # if input_tensor is not None:
-    #     input_tensor_grad = []
-    #     for x in input_tensor:
-    #         input_tensor_grad.append(None if x is None else x.grad)
-
-    # return input_tensor_grad[0] if unwrap_input_tensor_grad else input_tensor_grad
+        return None if input_tensor is None else input_tensor.grad
 
     def finalize_wte_grads_func(self):
         if self.group_size == 1:

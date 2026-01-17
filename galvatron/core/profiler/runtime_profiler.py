@@ -1,6 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 
 from .base_profiler import BaseProfiler
@@ -281,7 +282,30 @@ class RuntimeProfiler(BaseProfiler):
 
     def _process_time_results(self) -> None:
         """Process and save time profiling results"""
-        avg_time = sum(self.time_list) / len(self.time_list)
+        if not self.time_list:
+            avg_time = 0.0
+        elif len(self.time_list) == 1:
+            avg_time = self.time_list[0]
+        else:
+            # Calculate mean and standard deviation using numpy
+            time_array = np.array(self.time_list)
+            mean = np.mean(time_array)
+            std = np.std(time_array)
+            
+            # Filter values within 3 sigma range
+            lower_bound = mean - 3 * std
+            upper_bound = mean + 3 * std
+            filtered_times = time_array[(time_array >= lower_bound) & (time_array <= upper_bound)]
+            
+            # Calculate average of filtered values
+            if len(filtered_times) > 0:
+                avg_time = np.mean(filtered_times)
+                if len(filtered_times) < len(self.time_list):
+                    print(f"Filtered {len(self.time_list) - len(filtered_times)} outliers using 3-sigma rule")
+            else:
+                # Fallback: if all values are outliers, use original mean
+                avg_time = mean
+        
         print(f"Average iteration time is: {avg_time:.4f} s")
 
         args = self.args

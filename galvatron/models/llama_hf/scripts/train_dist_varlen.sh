@@ -13,7 +13,7 @@ LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
 LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
-TRAINER="train_dist.py"
+TRAINER="train_dist_varlen.py"
 DATA_PATH=/home/pkuhetu/lxy/dataset/llama/my-llama2_text_document
 VOCAB_FILE=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.json
 TOKENIZER_MODEL=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.model
@@ -72,7 +72,7 @@ CKPT_ARGS="
 # "
 
 PP=1
-TP=4
+TP=2
 CP=1
 
 PARALLEL_ARGS="
@@ -82,8 +82,8 @@ PARALLEL_ARGS="
     --global_cp_deg ${CP} \
     --sdp 1 \
     --global_checkpoint 0 \
-    --vocab_cp ${CP} \
     --vocab_tp ${TP} \
+    --vocab_cp ${CP} \
     --chunks 2 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
@@ -93,4 +93,10 @@ PARALLEL_ARGS="
     --initialize_on_meta 1"
     # --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_1nodes_8gpus_per_node_36GB_bf16_[tpconsec_off].json"
 
-${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS} # ${CKPT_ARGS}
+VARLEN_ARGS="
+    --dataset fix_length \
+    --use_pack 0 \
+    --varlen_training 0 \
+"
+
+${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS} ${VARLEN_ARGS} # ${CKPT_ARGS}

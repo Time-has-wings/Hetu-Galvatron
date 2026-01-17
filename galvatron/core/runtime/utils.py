@@ -173,3 +173,9 @@ def get_optimizer_and_param_scheduler(model, args):
 
     return optimizer, opt_param_scheduler
 
+# =================varlen===================
+def get_batch_size(input_ids:torch.Tensor, cu_seqlens:torch.Tensor=None):
+    assert input_ids.dim() == 2, f'input_ids must be a 2D tensor, but got shape {input_ids.shape}'
+    assert cu_seqlens is None or cu_seqlens.dim() == 1, f'cu_seqlens must be a 1D tensor, but got shape {cu_seqlens.shape}'
+    return input_ids.shape[0] if cu_seqlens is None else cu_seqlens.shape[0] - 1
+

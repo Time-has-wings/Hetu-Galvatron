@@ -60,37 +60,60 @@ class LlamaAttention_tp(nn.Module):
             cp_group=self.cp_group, sp_group=self.sp_group
         )
 
-    def forward(self, hidden_states, attention_mask, rotary_embedding):
+        self.max_seqlen = args.seq_length
+
+    def forward(self, hidden_states, attention_mask, rotary_embedding, cu_seqlens=None):
         input_tensor = hidden_states
         hidden_states = self.LayerNorm(hidden_states)
-        if self.sequence_parallel:
-            if self.use_ulysses:
-                if self.use_zigzag_cp:
-                    # max_seq_len = hidden_states.shape[0] * self.cp_size * self.sp_size
-                    # no offset for zigzag cp, because the offset is already included in the Megatron RotaryEmbedding
-                    rotary_pos_emb = self.rotary_pos_emb(
-                        hidden_states.shape[0] * self.cp_size * self.sp_size)
-                else:
-                    rotary_pos_emb = self.rotary_pos_emb(
-                        hidden_states.shape[0] , offset=hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group))
-            else:
-                if self.use_zigzag_cp:
-                    rotary_pos_emb = self.rotary_pos_emb(
-                        hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group) * self.cp_size)
-                elif rotary_embedding is not None:
-                    rotary_pos_emb = rotary_embedding
-                else:
-                    rotary_pos_emb = self.rotary_pos_emb(
-                        hidden_states.shape[0] * self.tp_size
-                    )
+
+        # if self.sequence_parallel:
+        #     if self.use_ulysses:
+        #         if self.use_zigzag_cp:
+        #             # max_seq_len = hidden_states.shape[0] * self.cp_size * self.sp_size
+        #             # no offset for zigzag cp, because the offset is already included in the Megatron RotaryEmbedding
+        #             rotary_pos_emb = self.rotary_pos_emb(
+        #                 hidden_states.shape[0] * self.cp_size * self.sp_size)
+        #         else:
+        #             rotary_pos_emb = self.rotary_pos_emb(
+        #                 hidden_states.shape[0] , offset=hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group))
+        #     else:
+        #         if self.use_zigzag_cp:
+        #             rotary_pos_emb = self.rotary_pos_emb(
+        #                 hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group) * self.cp_size)
+        #         elif rotary_embedding is not None:
+        #             rotary_pos_emb = rotary_embedding
+        #         else:
+        #             rotary_pos_emb = self.rotary_pos_emb(
+        #                 hidden_states.shape[0] * self.tp_size
+        #             )
+        # else:
+        #     if rotary_embedding is not None:
+        #         rotary_pos_emb = rotary_embedding
+        #     elif self.use_zigzag_cp:
+        #         rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * self.cp_size)
+        #     else:
+        #         rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0])
+        
+        if rotary_embedding is not None:
+            rotary_pos_emb = rotary_embedding
         else:
-            if rotary_embedding is not None:
-                rotary_pos_emb = rotary_embedding
-            elif self.use_zigzag_cp:
-                rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * self.cp_size)
+            if self.use_ulysses:
+                rotary_pos_emb = self.rotary_pos_emb(max_seq_len=self.max_seqlen // self.sp_size, offset=self.max_seqlen // self.sp_size * torch.distributed.get_world_size(self.tp_group))
             else:
-                rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0])
-        hidden_states, bias = self.attention(hidden_states, attention_mask, rotary_pos_emb=rotary_pos_emb)
+                rotary_pos_emb = self.rotary_pos_emb(max_seq_len=self.max_seqlen)
+
+        if cu_seqlens is not None:
+            from megatron.core.packed_seq_params import PackedSeqParams
+            cu_seqlens_int32 = cu_seqlens.to(dtype=torch.int32)
+            cu_seqlens_int32.contiguous()
+            packed_seq_params = PackedSeqParams(
+                cu_seqlens_q_padded=cu_seqlens_int32,
+                cu_seqlens_kv_padded=cu_seqlens_int32,
+            )
+        else:
+            packed_seq_params = None
+
+        hidden_states, bias = self.attention(hidden_states, attention_mask, rotary_pos_emb=rotary_pos_emb, cu_seqlens=cu_seqlens, max_seqlen=self.max_seqlen, packed_seq_params=packed_seq_params)
         hidden_states = hidden_states + input_tensor
         return hidden_states
 
@@ -126,11 +149,13 @@ class LlamaLayer_tp(nn.Module):
         hidden_states,
         attention_mask=None,
         rotary_embedding=None,
+        cu_seqlens=None,
     ):
         attention_output = self.attention(
             hidden_states,
             attention_mask,
             rotary_embedding,
+            cu_seqlens,
         )
         layer_output = self.mlp(attention_output)
 

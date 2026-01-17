@@ -40,7 +40,7 @@ class LlamaEmbeddings_(nn.Module):
                 torch.distributed.get_world_size(self.sp_group),
             )
 
-    def forward(self, tokens, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
+    def forward(self, tokens, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None, cu_seqlens=None):
         # tokens = input_ids[:, :-1].contiguous()
         # labels = input_ids[:, 1:].contiguous()
         if self.vocab_sp:
@@ -58,9 +58,9 @@ class LlamaLayers_(nn.Module):
         self.layer = model.layers[layer_idx]
         self.layer_idx = layer_idx
 
-    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None, cu_seqlens=None):
         # attention_mask = get_ltor_masks_and_position_ids(input_ids)
-        hidden_states = self.layer(hidden_states, attention_mask=attention_mask, rotary_embedding=rotary_embedding)  # , position_ids = position_ids)
+        hidden_states = self.layer(hidden_states, attention_mask=attention_mask, rotary_embedding=rotary_embedding, cu_seqlens=cu_seqlens)  # , position_ids = position_ids)
         return hidden_states
 
 
@@ -69,7 +69,7 @@ class LlamaPreNorm_(nn.Module):
         super().__init__()
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None, cu_seqlens=None):
         hidden_states = self.norm(hidden_states)
         return hidden_states
 
@@ -122,7 +122,7 @@ class LlamaCls_(nn.Module):
                 torch.distributed.get_world_size(self.sp_group),
             )
 
-    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None, cu_seqlens=None):
         if self.vocab_sp:
             labels = labels[:, self.seq_start_index : self.seq_end_index].contiguous()
         if not self.sequence_parallel:

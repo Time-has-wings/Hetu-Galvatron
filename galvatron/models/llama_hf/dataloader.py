@@ -21,7 +21,6 @@ from torch.utils.data import Dataset
 from galvatron.core.runtime.hybrid_parallel_config import get_chunks
 from galvatron.core.runtime.pipeline.utils import chunk_batch
 
-
 def random_get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
     micro_batch_size, seq_length = data.size()
@@ -171,6 +170,7 @@ def get_batch(data_iterator):
             "attention_mask": batch["attention_mask"],
             "labels": batch["labels"],
             "rotary_embedding": rotary_embedding,
+            "cu_seqlens": None,
         },
         partial(loss_func, micro_lossmask),
     )
@@ -204,3 +204,119 @@ def average_losses_across_context_parallel_group(losses):
 
     return averaged_losses
 
+# =================general===================
+class GeneralDataLoader(Dataset):
+    def __init__(self, args, device, dataset_size=2560 * 16):
+        self.vocab_size = args.vocab_size
+        self.sentence_length = args.seq_length
+        self.dataset_size = dataset_size
+        self.device = device
+        self.dataset = args.dataset
+        self.world_size = torch.distributed.get_world_size()
+
+        if args.dataset == 'fix_length':
+            self.data_length = np.random.randint(1, self.sentence_length + 1, (self.dataset_size,))
+            self.input_ids = []
+            for i in range(self.dataset_size):
+                sentence = np.random.randint(0, self.vocab_size, (self.sentence_length,))
+                sentence[self.data_length[i] :] = 0
+                mask = np.ones((self.sentence_length,))
+                mask[self.data_length[i] :] = 0
+
+                padding_sentence = np.zeros(self.sentence_length, dtype=sentence.dtype)
+                padding_sentence[: self.sentence_length] = sentence
+                self.input_ids.append(padding_sentence)
+
+            self.input_ids = np.array(self.input_ids)
+        elif args.dataset == 'random':
+            self.data_length = np.random.randint(1, self.sentence_length + 1, (self.dataset_size, ))
+            for i in range(self.dataset_size):
+                length = self.data_length[i]
+                if length % self.world_size != 0:
+                    self.data_length[i] = length + self.world_size - length % self.world_size
+
+            self.input_ids = []
+            for i in range(self.dataset_size):
+                sentence = np.random.randint(0, self.vocab_size, (self.data_length[i], ))
+                self.input_ids.append(sentence)
+            pass
+        elif args.dataset == 'github':
+            pass
+        else:
+            raise NotImplementedError("Only 'fix_length', 'random', and 'github' dataset types are supported. Please implement logic for other dataset types.")
+
+    def __len__(self):
+        return self.dataset_size
+
+    def __getitem__(self, idx):
+        if idx >= self.dataset_size:
+            raise IndexError
+        input_ids = torch.LongTensor(self.input_ids[idx]).to(self.device)
+        labels = torch.zeros_like(input_ids).to(self.device)
+        labels[:-1] = input_ids[1:]
+        return input_ids, labels
+
+def general_collate_fn(batch):
+    args = get_args()
+
+    # Check arguments
+    if args.varlen_training:
+        assert args.use_pack == 1, "When varlen_training is 1, use_pack must be 1"
+    assert args.use_flash_attn, "When use_flash_attn is False, general_collate_fn is not supported"
+    
+    # some constant variables
+    rotary_embedding = None
+    attention_mask = None
+
+    if args.use_pack: # Pack mode: concatenate sequences of different lengths into one long sequence.Each sequence in batch can have different length
+        input_ids, labels = list(zip(*batch))
+        
+        cu_seqlens = torch.zeros(len(batch) + 1, dtype=torch.int32, device=input_ids[0].device)
+        cu_seqlens[0] = 0
+        for i in range(1, len(cu_seqlens)):
+            cu_seqlens[i] = cu_seqlens[i - 1] + input_ids[i - 1].numel()
+        
+        input_ids = torch.cat(input_ids, dim=0)
+        labels = torch.cat(labels, dim=0)
+        input_ids = input_ids.view(1, -1).contiguous()
+        labels = labels.view(1, -1).contiguous()
+
+    else: # Non-pack mode: all sequences must have the same length
+        try:
+            input_ids, labels = list(zip(*batch))
+            input_ids = torch.stack(input_ids, dim=0)
+            labels = torch.stack(labels, dim=0)
+            cu_seqlens = None
+        except Exception as e:
+            raise RuntimeError(
+                f'When use_pack=0, all sequences in batch must have the same length. torch.stack only supports stacking tensors of the same shape.'
+                f'Got error: {e}. Consider setting use_pack=1 for variable-length sequences.'
+            )
+
+    return input_ids, {"cu_seqlens": cu_seqlens, "attention_mask": attention_mask, "labels": labels, "rotary_embedding": rotary_embedding}, general_loss_func
+
+def general_loss_func(output_tensor:torch.Tensor):
+    loss = output_tensor.float()
+    loss_mask = torch.ones_like(loss).float()
+    loss = torch.sum(loss.view(-1) * loss_mask.view(-1)) / loss_mask.sum()
+    averaged_loss = average_losses_across_data_parallel_group([loss])
+    averaged_loss = average_losses_across_context_parallel_group([averaged_loss])
+    return loss, averaged_loss[0].clone().detach()
+
+def init_loguru(msg=None):
+    import torch
+    from loguru import logger
+    import os
+    try:
+        rank = torch.distributed.get_rank()
+    except Exception:
+        rank = 0
+    if msg is None:
+        log_dir = './logs'
+    else:
+        log_dir = f'{msg}_logs'
+    if rank == 0:
+        os.system(f'rm -rf {log_dir}/*')
+    torch.distributed.barrier()
+    logger.add(f"{log_dir}/log_rank{rank}.log", rotation="500 MB", encoding="utf-8")
+    logger.info(f'rank[{rank}] start to record...')

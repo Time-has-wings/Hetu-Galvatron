@@ -1,13 +1,6 @@
 import os
-
 import torch
-from torch import nn
-from torch.profiler import profile, record_function, ProfilerActivity
-from tqdm import tqdm
-from transformers import LlamaConfig, LlamaForCausalLM
-
 from galvatron.core import (
-    RuntimeProfiler,
     clip_grad_norm,
     get_optimizer_and_param_scheduler,
     initialize_galvatron,
@@ -15,26 +8,34 @@ from galvatron.core import (
 )
 from galvatron.models.llama_hf.arguments import model_args
 from galvatron.models.llama_hf.dataloader import (
-    DataLoaderForLlama,
-    get_batch,
-    get_train_valid_test_data_iterators,
-    loss_func,
-    init_loguru,
+    GeneralDataLoader,
+    general_collate_fn,
 )
 from galvatron.models.llama_hf.LlamaModel_checkpoint import save_llama_module
 from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_llama_config, get_runtime_profiler, llama_model_hp
-from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
-from galvatron.utils import distributed_dataloader, print_loss, set_seed, print_param_num
+from galvatron.utils import distributed_dataloader, set_seed
 from megatron.training.arguments import _print_args
+from galvatron.models.llama_hf.dataloader import init_loguru
 
 
 def train(args):
-    init_loguru()
     local_rank = args.local_rank
     rank = torch.distributed.get_rank()
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    world_size = torch.distributed.get_world_size()
+
+    import time
+    torch.distributed.barrier()
+    if rank == 0:
+        timestamp = int(time.time())
+    else:
+        timestamp = 0
+    timestamp_tensor = torch.tensor([timestamp], dtype=torch.long, device=device)
+    torch.distributed.all_reduce(timestamp_tensor, op=torch.distributed.ReduceOp.MAX, group=None)
+    torch.distributed.barrier()
+    timestamp = int(timestamp_tensor.item())
+    init_loguru(msg=f'train_dist_varlen/{timestamp}')
+    torch.distributed.barrier()
 
     config = get_llama_config(args)
     model = llama_model_hp(config, args)
@@ -48,7 +49,14 @@ def train(args):
     if local_rank == 0:
         _print_args("arguments", args)
 
-    train_data_iterator, valid_data_iterator, test_data_iterator = get_train_valid_test_data_iterators()
+    trainloader = distributed_dataloader(
+        dataset=GeneralDataLoader(args, device),
+        global_bsz=args.global_train_batch_size,
+        shuffle=True,
+        args=args,
+        group=model.dp_groups_whole[0].group,
+        collate_fn=general_collate_fn,
+    )
 
     optimizer, opt_param_scheduler = get_optimizer_and_param_scheduler(model, args)
 
@@ -59,15 +67,13 @@ def train(args):
     if local_rank == 0:
         print("Start training...")
 
-    for iter in range(args.iteration, args.train_iters):
-        tokens, kwargs, loss_func = get_batch(train_data_iterator)
-    
+    for iter, batch in enumerate(trainloader):
+        input_ids, kwargs, loss_func = batch
+
         profiler.profile_time_start(iter)
         profiler.profile_memory(iter, "Before Forward")
 
-        input_ids = tokens
-        batch = [input_ids]
-        loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
+        loss = model.forward_backward(input_ids, iter, profiler, loss_func=loss_func, **kwargs)
 
         profiler.profile_memory(iter, "After Backward")
 

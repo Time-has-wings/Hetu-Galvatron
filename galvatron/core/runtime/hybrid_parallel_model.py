@@ -31,9 +31,10 @@ if version_major > 1:
 else:
     assert False, f"PyTorch version must be greater than 2.0, but found {torch.__version__}"
 
+from galvatron.core.runtime.pipeline.pipeline import PipelineParallel
 
 class GalvatronModel(nn.Module):
-    def __init__(self, hp_model):
+    def __init__(self, hp_model:PipelineParallel):
         super().__init__()
         from galvatron.core import get_args
 
@@ -41,52 +42,31 @@ class GalvatronModel(nn.Module):
         self.model = hp_model
         self.iter = 0
 
-    def forward_backward(self, batch, iter=None, profiler=None, loss_func=None, **kwargs):
+    def forward_backward(self, input_ids, iter=None, profiler=None, loss_func=None, **kwargs):
         args, model = self.args, self.model
         self.iter = iter if iter is not None else self.iter
-        if loss_func is not None:
-            if len(batch) == 1 and isinstance(batch[0], Tensor):
-                batch = [batch, [self.fake_tensor(batch[0])]]
-            assert (
-                isinstance(batch, (tuple, list))
-                and isinstance(batch[0], (tuple, list))
-                and isinstance(batch[1], (tuple, list))
-            )
-        else:
-            loss_func = self.fake_loss_func
-            assert isinstance(batch, (tuple, list))
-            batch = [batch, [self.fake_tensor(batch[0])]]
+
         if args.pp_deg > 1:
-            if args.pipeline_type == "gpipe":
-                loss = model.gpipe_forward(batch, loss_func, **kwargs)
-                if profiler is not None:
-                    profiler.profile_memory(self.iter, "After Forward")
-                model.gpipe_backward()
-            elif args.pipeline_type == "pipedream_flush":
-                loss = model.pipedream_flush_forward_backward(batch, loss_func, **kwargs)
+            assert False, f'Galvatron:forward_backward, pp is not implemented'
         else:
-            loss = model.no_pipeline_forward_backward(
-                batch, loss_func, forward_only=args.profile_forward, profiler=profiler, iter=self.iter, **kwargs
-            )
+            if loss_func is None:
+                loss_func = self.fake_loss_func
+            loss_list = model.no_pipeline_forward_backward(input_ids, loss_func, forward_only=args.profile_forward, profiler=profiler, iter=self.iter, **kwargs)
         self.iter += 1
-        return self.loss_to_cpu(loss)
+        return self.loss_to_cpu(loss_list)
 
-    def fake_tensor(self, x):
-        return torch.zeros([x.shape[0], 1], dtype=x.dtype, device=x.device)
+    def fake_loss_func(self, output_tensor:torch.Tensor):
+        """
+            The first loss is used for backward propagation on this device.
+            The second loss is the globally reduced loss.
+            This fake function is used for testing purposes, and the second loss currently does not consider reduction.
+        """
+        loss = output_tensor.float().mean()
+        return loss, loss.clone().detach()
 
-    def fake_loss_func(self, labels, outputs):
-        if torch.numel(outputs[0]) > 1:
-            loss = outputs[0].mean()
-            return loss, loss.clone().detach()
-        return outputs[0], outputs[0].clone().detach()
-
-    def loss_to_cpu(self, loss):
-        if isinstance(loss, (list, tuple)):  # Average loss of each microbatch
-            if len(loss) == 0:
-                return None
-            loss = np.mean([l.item() for l in loss])
-        else:
-            loss = loss.item()
+    def loss_to_cpu(self, loss_list):
+        assert isinstance(loss_list, list) and len(loss_list) > 0, f'loss_list must be a non-empty list, but got {loss_list}'
+        loss = np.mean([l.item() for l in loss_list])
         return loss
 
 def construct_hybrid_parallel_model_api(
