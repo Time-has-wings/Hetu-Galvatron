@@ -47,11 +47,11 @@ class CustomBuildExt(build_ext):
         build_ext.run(self)
 
 
-# Define the extension module
-dp_core_ext = Extension(
-    'galvatron_dp_core',
-    sources=['csrc/dp_core.cpp'],
-    extra_compile_args=['-O3', '-Wall', '-shared', '-std=c++11', '-fPIC'],
+# Define the extension modules
+dynamic_program_ext = Extension(
+    'dynamic_program_cpp',
+    sources=['csrc/dynamic_program.cpp'],
+    extra_compile_args=['-O3', '-Wall', '-shared', '-std=c++14', '-fPIC'],
     language='c++'
 )
 
@@ -107,6 +107,6 @@ setup(
     },
     install_requires=_deps,
     setup_requires=["pybind11>=2.9.1"],
-    ext_modules=[dp_core_ext],
+    ext_modules=[dp_core_ext, dynamic_program_ext],
     data_files=data_files
 )

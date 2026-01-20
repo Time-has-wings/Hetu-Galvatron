@@ -22,7 +22,6 @@ COST_MODEL_ARGS="
     --num_gpus_per_node ${NUM_GPUS_PER_NODE} \
     --mixed_precision bf16 \
     --pipeline_type pipedream_flush \
-    --default_dp_type zero2 \
     --sequence_parallel \
     --async_grad_reduce 0 \
     --time_profile_mode batch \

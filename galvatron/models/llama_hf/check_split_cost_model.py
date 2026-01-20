@@ -5,7 +5,7 @@ from galvatron.core.cost_model import GalvatronCostModelHandler
 from galvatron.models.llama_hf.arguments import model_args
 from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_llama_config
 from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
-from galvatron.utils.strategy_utils import GalvatronStrategy
+from galvatron.utils.strategy_utils import AttentionStrategy, FFNStrategy, EmbeddingLMHeadStrategy, DPType
 
 if __name__ ==  '__main__':
     args = initialize_galvatron(model_args, mode="cost_model")
@@ -21,35 +21,35 @@ if __name__ ==  '__main__':
     cases = [
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero2')
+            "strategy": AttentionStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero2')
+            "strategy": AttentionStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero2')
+            "strategy": AttentionStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type='zero2')
+            "strategy": AttentionStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero2', checkpoint=True)
+            "strategy": AttentionStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.ZERO2, checkpoint=True)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero2', checkpoint=True)
+            "strategy": AttentionStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.ZERO2, checkpoint=True)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero2', checkpoint=True)
+            "strategy": AttentionStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.ZERO2, checkpoint=True)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type='zero2', checkpoint=True)
+            "strategy": AttentionStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type=DPType.ZERO2, checkpoint=True)
         },
     ]
     
@@ -57,13 +57,9 @@ if __name__ ==  '__main__':
     for case in cases:
         global_batch_size = case["global_batch_size"]
         chunks = case["chunks"]
-        attention_strategy:GalvatronStrategy = copy.deepcopy(case["strategy"])
-        attention_strategy.unit = 'attention'
-        ffn_strategy:GalvatronStrategy = copy.deepcopy(case["strategy"])
-        ffn_strategy.unit = 'ffn'
-        embedding_lmhead_strategy:GalvatronStrategy = copy.deepcopy(case["strategy"])
-        embedding_lmhead_strategy.unit = 'embedding_lmhead'
-        embedding_lmhead_strategy.checkpoint = False
+        attention_strategy:AttentionStrategy = copy.deepcopy(case["strategy"])
+        ffn_strategy:FFNStrategy = attention_strategy.to_ffn_strategy()
+        embedding_lmhead_strategy:EmbeddingLMHeadStrategy = attention_strategy.to_embedding_lmhead_strategy()
 
         print(f"\n=== Check Cost for Global_batch_size: {global_batch_size}, Chunks: {chunks}, attention_strategy: {attention_strategy}, ffn_strategy: {ffn_strategy}, embedding_lmhead_strategy: {embedding_lmhead_strategy} ===")
         time_cost = cost_model_handler.get_time_cost_for_specific_strategy_split(attention_strategy, ffn_strategy, embedding_lmhead_strategy, global_batch_size, chunks)

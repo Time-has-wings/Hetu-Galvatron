@@ -97,7 +97,7 @@ class allreduce_block(nn.Module):
 class DataLoaderRandom(Dataset):
     def __init__(self, local_bsz, profile_time):
         # world_size = torch.distributed.get_world_size()
-        self.dataset_size = local_bsz * 11
+        self.dataset_size = local_bsz*11
         self.input = np.random.rand(*(self.dataset_size, 512, 1024))
         self.profile_time = profile_time
 
@@ -108,7 +108,7 @@ class DataLoaderRandom(Dataset):
         if idx >= self.dataset_size:
             raise IndexError
         if self.profile_time == 1:
-            input = torch.tensor(self.input[idx], dtype=torch.bfloat16)
+            input = torch.tensor(self.input[idx],dtype=torch.bfloat16)
         else:
             input = torch.FloatTensor(self.input[idx])
         return input
@@ -150,7 +150,8 @@ def train(args):
         print('local_bsz = %d'%train_batch_size_input)
 
     dataset = DataLoaderRandom(train_batch_size_input, args.profile_time)
-    trainloader = DataLoader(dataset=dataset, batch_size=train_batch_size_input)
+    trainloader = DataLoader(dataset=dataset,
+                            batch_size=train_batch_size_input)
 
     all_tp_sizes = [args.global_tp_deg] * 24
     all_sp_sizes = [1] * 24
@@ -194,16 +195,7 @@ def train(args):
     dp_size = world_size // pp_deg // tp_size
     bs = args.local_batch_size
     # per size: 1MB * bs when profile time == 1
-    # 这个size就很离谱
-    allreduce_message_size_per_layer = 2 * (tp_size - 1) / tp_size * (bs * 512 * 1024 * 2 * 4 / 1024 / 1024) # 此处的乘以2是，前向一次，然后反向一次
-    # allreduce_message_size_per_layer = 2 * (tp_size - 1) / tp_size * (bs * 512 * 1024 * 4 / 1024 / 1024) # 此处多了一个2吧。（不对，乘B）
-
-    # 一次allreduce的通信量为
-    dtype_size = 4 # 使用的是fp32
-    allreduce_messgae_size = 2 * (tp_size - 1) / tp_size * (bs * 512 * 1024 * dtype_size) / 1024 / 1024
-    # 然后总共有两次通信（forward一次，backward一次）
-
-
+    allreduce_message_size_per_layer = 2*(tp_size-1)/tp_size*(bs*512*1024*2*4/1024/1024)
     allreduce_message_size_total = allreduce_message_size_per_layer * 24 // pp_deg
     if rank == 0:
         print('Strategy: %d_%d_%d'%(pp_size,tp_size,args.global_tp_consec))
@@ -244,8 +236,8 @@ def train(args):
             comm_time = str2time(result[cuda_total_idx])
             
             if args.profile_time == 0:
-                allreduce_time_24_layer = comm_time / 10 # 一个批次的时间
-                comm_coe = allreduce_message_size_total / allreduce_time_24_layer # allreduce_messgae_size_total是一整个模型的通信总量
+                allreduce_time_24_layer = comm_time / 10
+                comm_coe = allreduce_message_size_total / allreduce_time_24_layer
                 comm_coe = torch.tensor([comm_coe]).to(device)
                 torch.distributed.all_reduce(comm_coe, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
                 comm_coe = comm_coe.cpu().numpy()[0] / tp_groups[0].size
@@ -261,7 +253,7 @@ def train(args):
                     write_json_config(config, env_config_path)
                     print('Already written allreduce bandwidth into env config file %s!'%(env_config_path))
             else:
-                per_comm_time = comm_time / comm_num # 总时间除以通信次数，说明是一次allreduce的时间
+                per_comm_time = comm_time / comm_num
                 per_comm_time = torch.tensor([per_comm_time]).to(device)
                 torch.distributed.all_reduce(per_comm_time, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
                 per_comm_time = per_comm_time.cpu().numpy()[0] / tp_groups[0].size
@@ -273,7 +265,7 @@ def train(args):
                     env_config_path = os.path.join(path, './hardware_configs/sp_time_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
                     config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
                     key = 'allreduce_size_%d_%dMB_time'%(tp_size,args.local_batch_size)
-                    config[key] = per_comm_time # 传输args.local_batch_size的所需的allreduce的时间为per_comm_time， 所以all_gather与reduce_scatter的时间进行平摊即可
+                    config[key] = per_comm_time
                     write_json_config(config, env_config_path)
                     print('Already written allreduce bandwidth into env config file %s!'%(env_config_path))
         except Exception as e:

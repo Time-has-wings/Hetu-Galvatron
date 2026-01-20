@@ -5,7 +5,7 @@ from logging import Logger
 from typing import List
 
 @dataclass
-class ModelArgsOptimize:
+class ModelArgs:
     hidden_size: int = 4096
     n_kv_heads:int = 4
     n_heads: int = 32
@@ -23,7 +23,7 @@ class ModelArgsOptimize:
 
 
 @dataclass
-class TrainArgsOptimize:
+class TrainArgs:
     """Basic training arguments"""
     seq_length: int = 1024
     hidden_size: int = 4096
@@ -33,12 +33,10 @@ class TrainArgsOptimize:
     mixed_precision: bool = False
     
     """Data parallel related arguments"""
-    use_zero2_for_dp: bool = False
     async_grad_reduce: bool = True
     
     """Tensor/Sequence parallel related arguments"""
-    disable_vtp: bool = False
-    sequence_parallel: bool = False
+    sequence_parallel: bool = True
     
     """Pipeline parallel related arguments"""
     pipeline_type: str = 'gpipe'
@@ -51,7 +49,7 @@ class TrainArgsOptimize:
     
     
 @dataclass
-class ProfileModelArgsOptimize:
+class ProfileModelArgs:
     # all / attention / mlp
     forward_computation_time: Optional[Union[float, list]] = 35 / 24
     parameter_memory: float = 2025.0928
@@ -63,7 +61,7 @@ class ProfileModelArgsOptimize:
     other_memory_pp_on: dict = field(default_factory=lambda: {'model_states': 640, 'activation': 320})
 
 @dataclass
-class ProfileHardwareArgsOptimize:
+class ProfileHardwareArgs:
     """Communication Coefficients related arguments"""
     bct_fct_coe: float = 2
     overlap_slowdown_coe: float = 1.3
@@ -81,7 +79,7 @@ class ProfileHardwareArgsOptimize:
     all2all_fit_dict: dict = field(default_factory=lambda: {})
 
 @dataclass
-class UtilsArgsOptimize:
+class UtilsArgs:
     """Utility related arguments"""
     extra_overhead: float = 0
     costmodel_coe: float = 1.0
@@ -93,7 +91,7 @@ class EstimateTPTimeType(Enum):
     FIT = 2        
 
 @dataclass
-class VersionOptionArgsOptimize:
+class VersionOptionArgs:
     """Version and Iteration related arguments"""
     estimate_tp_time_type: EstimateTPTimeType = EstimateTPTimeType.FIXED
     zero_with_slight_noise: bool = True

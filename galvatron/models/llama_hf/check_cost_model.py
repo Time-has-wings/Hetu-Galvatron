@@ -4,9 +4,15 @@ from galvatron.core.cost_model import GalvatronCostModelHandler
 from galvatron.models.llama_hf.arguments import model_args
 from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_llama_config
 from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
-from galvatron.utils.strategy_utils import GalvatronStrategy
+from galvatron.utils.strategy_utils import LayerStrategy, DPType
+from galvatron.models.llama_hf.dataloader import init_loguru
 
 if __name__ ==  '__main__':
+    import time
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    log_file = f'check_cost_model_llama/{timestamp}.log'
+    init_loguru(log_file)
+
     args = initialize_galvatron(model_args, mode="cost_model")
     config = get_llama_config(args)
     path = os.path.dirname(os.path.abspath(__file__))
@@ -20,74 +26,74 @@ if __name__ ==  '__main__':
     time_cases = [
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero2', checkpoint=True)
+            "strategy": LayerStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.ZERO2, checkpoint=True)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero2', checkpoint=True)
+            "strategy": LayerStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.ZERO2, checkpoint=True)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero2', checkpoint=True)
+            "strategy": LayerStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.ZERO2, checkpoint=True)
         },
         {
             "global_batch_size": 128, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type='zero2', checkpoint=True)
+            "strategy": LayerStrategy(pp_size=1, tp_size=8, dp_size=1, dp_type=DPType.ZERO2, checkpoint=True)
         },
     ]
     
     memory_cases = [
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero0')
+            "strategy": LayerStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.DDP)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type='zero3')
+            "strategy": LayerStrategy(pp_size=1, tp_size=1, dp_size=8, dp_type=DPType.ZERO3)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero0')
+            "strategy": LayerStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.DDP)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type='zero3')
+            "strategy": LayerStrategy(pp_size=1, tp_size=2, dp_size=4, dp_type=DPType.ZERO3)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero0')
+            "strategy": LayerStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.DDP)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero2')
+            "strategy": LayerStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.ZERO2)
         },
         {
             "global_batch_size": 64, "chunks":8,
-            "strategy": GalvatronStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type='zero3')
+            "strategy": LayerStrategy(pp_size=1, tp_size=4, dp_size=2, dp_type=DPType.ZERO3)
         },
         
     ]

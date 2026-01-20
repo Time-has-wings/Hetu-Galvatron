@@ -68,7 +68,7 @@ def train(args):
     if trace == False:
         for iter in range(args.iteration, args.train_iters):
             tokens, kwargs, loss_func = get_batch(train_data_iterator)
-            print(f'start iter {iter},  tokens.shape {tokens.shape}')
+            # print(f'start iter {iter},  tokens.shape {tokens.shape}')
         
             profiler.profile_time_start(iter)
             profiler.profile_memory(iter, "Before Forward")

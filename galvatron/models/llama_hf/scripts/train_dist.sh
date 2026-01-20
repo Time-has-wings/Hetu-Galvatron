@@ -31,7 +31,7 @@ MODEL_ARGS="
 
 TRAIN_ARGS="
     --global_train_batch_size 128 \
-    --train-iters 30 \
+    --train-iters 40 \
     --eval-iters 1 \
     --lr 1.25e-6 \
     --lr-decay-style cosine \
@@ -71,15 +71,18 @@ CKPT_ARGS="
 #     --distributed_checkpoint
 # "
 
+TP_DEG=1
+PP_DEG=1
+
 PARALLEL_ARGS="
-    --pp_deg 1 \
-    --global_tp_deg 2 \
+    --pp_deg ${PP_DEG} \
+    --global_tp_deg ${TP_DEG} \
     --global_tp_consec 1 \
-    --global_cp_deg 4 \
+    --global_cp_deg 1 \
     --sdp 0 \
     --global_checkpoint 0 \
-    --vocab_tp 2 \
-    --vocab_cp 4 \
+    --vocab_tp ${TP_DEG} \
+    --vocab_cp 1 \
     --chunks 8 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \

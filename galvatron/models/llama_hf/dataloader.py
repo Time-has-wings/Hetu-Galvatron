@@ -204,3 +204,14 @@ def average_losses_across_context_parallel_group(losses):
 
     return averaged_losses
 
+import loguru
+
+def init_loguru(msg=None):
+    import os
+    if not msg:
+        dir = os.path.dirname(os.path.realpath(__file__))
+    else:
+        dir = msg
+    log_path = os.path.join(dir, "loguru_log.txt")
+    loguru.logger.add(log_path, format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}", level="INFO") 
+    loguru.logger.info("loguru logger initialized")
