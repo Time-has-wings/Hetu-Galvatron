@@ -8,7 +8,7 @@ from tests.utils.search_configs import (
 )
 from galvatron.core.search_engine.search_engine import optimal_chunk_func_default
 from galvatron.utils.config_utils import read_allreduce_bandwidth_config, read_p2p_bandwidth_config, remap_config
-from galvatron.core.search_engine.cost_model_args import ModelArgs, TrainArgs, ParallelArgs, ProfileModelArgs, ProfileHardwareArgs
+from galvatron.core.cost_model.cost_model_args import ModelArgs, TrainArgs, ParallelArgs, ProfileModelArgs, ProfileHardwareArgs
 
 @dataclass
 class MemoryModelArgs:

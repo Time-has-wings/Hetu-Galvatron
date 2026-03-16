@@ -34,7 +34,6 @@ class GalvatronSearchEngine():
         self.time_profiled_list = None
         self.use_pipeline_costmodel = args.use_pipeline_costmodel
         self.model_type = 'gpt'
-        self.optimal_chunk_func = optimal_chunk_func_default
         self.memory_constraint = args.memory_constraint * 1024
         
     # =============== Setting Galvatron Search Engine Basic Information ===============
@@ -80,10 +79,7 @@ class GalvatronSearchEngine():
 
         self.time_path = os.path.join(self.time_path, time_config_name)
         return self.time_path
-    
-    def set_microbatch_func(self, microbatch_size, max_chunk):
-        self.optimal_chunk_func = lambda local_bsz, strategy: optimal_chunk_func_default(local_bsz, strategy, microbatch_size)
-    
+     
     def set_model_layer_configs(self, model_layer_configs):
         if model_layer_configs is None:
             return
@@ -479,7 +475,7 @@ class GalvatronSearchEngine():
                 sequence_parallel=self.args.sequence_parallel,
                 sp_space=self.args.sp_space,
                 pipeline_type=self.args.pipeline_type,
-                optimal_chunk_func=self.optimal_chunk_func,
+                # optimal_chunk_func=self.optimal_chunk_func,
             )
             profile_model_args = ProfileModelArgs(
                 tp_activation_per_bsz_dict=self.act_sizes[i],
@@ -736,10 +732,10 @@ class GalvatronSearchEngine():
             assert args.min_bsz is not None and args.max_bsz is not None and args.bsz_scale is not None
             assert args.min_bsz > 0 and args.max_bsz > 0 and args.bsz_scale > 0
             assert args.max_bsz >= args.min_bsz
-            self.min_bsz = args.min_bsz
-            self.max_bsz = args.max_bsz
+            self.min_bsz = max(args.min_bsz, args.bsz_scale)
             self.bsz_scale = args.bsz_scale
-            self.BSZs = list(range(self.min_bsz, self.max_bsz + 1, self.bsz_scale))
+            self.BSZs = list(range(self.min_bsz, args.max_bsz + 1, self.bsz_scale))
+            self.max_bsz = self.BSZs[-1]
             print('-----', '[Searching Batch Sizes Info]', 'Min bsz:', self.min_bsz, 'Max bsz:', self.max_bsz, 'bsz_scale:', self.bsz_scale, '-----')
             print('-----', '[Searching Batch Sizes Info]', 'BSZs:', self.BSZs, '-----')
 
@@ -948,87 +944,115 @@ class GalvatronSearchEngine():
 
 
 # ========================== Pipeline Division & Pipeline Cost Utils ==========================
-def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num, pp_deg, bsz, mbsz, strategies):
-    return None, None
-    # model_args_list, train_args_list= [copy.deepcopy(model_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(train_args_list[i]) for i in range(len(layer_num))]
-    # parallel_args_list, profile_model_args_list = [copy.deepcopy(parallel_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(profile_model_args_list[i]) for i in range(len(layer_num))]
-    # for i in range(len(parallel_args_list)):
-    #     parallel_args_list[i].pipeline_type = 'gpipe'
-    # assert(len(model_args_list) == len(layer_num) and len(train_args_list) == len(layer_num) and len(parallel_args_list) == len(layer_num) and len(profile_model_args_list) == len(layer_num))
-    # if pp_deg == 1:
-    #     return [np.sum(layer_num)], None
-    # layer_type_num = len(layer_num)
-    # layer_min_memcost = []
+def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num, pp_deg, bsz, mbsz, strategies:Union[List[LayerStrategy], List[EmbeddingLMHeadStrategy]]): # TODO: Confirm whether this function is still required.
+    model_args_list, train_args_list= [copy.deepcopy(model_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(train_args_list[i]) for i in range(len(layer_num))]
+    parallel_args_list, profile_model_args_list = [copy.deepcopy(parallel_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(profile_model_args_list[i]) for i in range(len(layer_num))]
+    for i in range(len(parallel_args_list)):
+        parallel_args_list[i].pipeline_type = 'gpipe'
+    assert(len(model_args_list) == len(layer_num) and len(train_args_list) == len(layer_num) and len(parallel_args_list) == len(layer_num) and len(profile_model_args_list) == len(layer_num))
+    if pp_deg == 1:
+        return [np.sum(layer_num)], None
+    layer_type_num = len(layer_num)
+    layer_min_memcost = []
     # strategies = list(filter(lambda s: s[0] == pp_deg, strategies))
-    # if len(strategies)==0:
-    #     return None, None
+    strategies = list(filter(lambda s: s.pp_size == pp_deg, strategies))
+    if len(strategies)==0:
+        return None, None
+    gpu_num = strategies[0].world_size
     # gpu_num = strategies[0][0] * strategies[0][1] * strategies[0][2]
-    # for i in range(layer_type_num):
-    #     # memcosts = [MemoryCostModel(strategy, global_batch_size=bsz, model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total'] for strategy in strategies]
-    #     # layer_min_memcost.append(np.min(memcosts))
-    #     memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
-    #                               model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total']
-    #     layer_min_memcost.append(np.min(memcost))
-    # other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
-    #                              model_args=model_args_list[0], train_args=train_args_list[0], parallel_args=parallel_args_list[0], profile_model_args=profile_model_args_list[0]).get_memory_cost()['other'][1]
-    # # print(other_cost)
-    # # print(layer_min_memcost, other_cost)
-    # min_memcost_all_layers = []
-    # for i in range(layer_type_num):
-    #     min_memcost_all_layers += [layer_min_memcost[i]] * layer_num[i]
-    # # print(min_memcost_all_layers)
-    # avg_mem_cost = (np.sum(min_memcost_all_layers) + np.sum(other_cost)) / pp_deg
-    # # print(min_memcost_all_layers, other_cost)
-    # # print('Avg memcost:', avg_mem_cost)
-
-    # pp_divide = [0] * pp_deg
-    # mem_cost_per_stage = other_cost.copy()
-    # idx = 0
-    # for i in range(pp_deg):
-    #     while True:
-    #         if idx >= len(min_memcost_all_layers):
-    #             break
-    #         if i < pp_deg - 1 and avg_mem_cost - mem_cost_per_stage[i] < 0.5 * min_memcost_all_layers[idx]:
-    #             break
-    #         else:
-    #             mem_cost_per_stage[i] += min_memcost_all_layers[idx]
-    #             idx += 1
-    #             pp_divide[i] += 1
-
-    # # Avoid too much memory cost on previous stages
-    # for i in range(pp_deg - 1):
-    #     left, right = int(np.sum(pp_divide[:i])), int(np.sum(pp_divide[:i+1]))
-    #     mem_cost_cur_stage = np.sum(min_memcost_all_layers[left:right]) + other_cost[i]
-    #     while mem_cost_cur_stage > avg_mem_cost * 1.3:
-    #         pp_divide[i] -= 1
-    #         pp_divide[i+1] += 1
-    #         right -= 1
-    #         mem_cost_cur_stage -= min_memcost_all_layers[right]
-
-    # # Avoid no layers on previous stages
-    # for i in range(pp_deg-1):
-    #     while pp_divide[i] <= 0:
-    #         pp_divide[i] += 1
-    #         pp_divide[i+1] -= 1
-
-    # # Avoid no layers on last stage
-    # for i in range(pp_deg-1, 0, -1):
-    #     while pp_divide[i] <= 0:
-    #         pp_divide[i] += 1
-    #         pp_divide[i-1] -= 1
+    for i in range(layer_type_num):
+        # memcosts = [MemoryCostModel(strategy, global_batch_size=bsz, model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total'] for strategy in strategies]
+        # layer_min_memcost.append(np.min(memcosts))
+        temp_strategy = LayerStrategy(pp_size=pp_deg, tp_size=1, sp_size=1, dp_size=gpu_num//pp_deg, dp_type=DPType.ZERO2, checkpoint=False)
+        memcost = MemoryCostModelBase(
+            strategy=temp_strategy,
+            global_batch_size=bsz,
+            chunks=bsz//mbsz,
+            model_args=model_args_list[i],
+            train_args=train_args_list[i],
+            parallel_args=parallel_args_list[i],
+            profile_model_args=profile_model_args_list[i]
+        ).get_memory_cost()['enc_total']
+        # memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
+                                #   model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total']
+        layer_min_memcost.append(np.min(memcost))
     
-    # mem_cost_per_stage_adjusted = other_cost.copy()
-    # # print(pp_divide)
-    # # print(other_cost, avg_mem_cost)
-    # for i in range(pp_deg):
-    #     left, right = int(np.sum(pp_divide[:i])), int(np.sum(pp_divide[:i+1]))
-    #     mem_cost_per_stage_adjusted[i] +=  np.sum(min_memcost_all_layers[left:right])
-    # # print(mem_cost_per_stage,mem_cost_per_stage_adjusted)
-    # return pp_divide, mem_cost_per_stage_adjusted
+    embedding_lmhead_strategy = EmbeddingLMHeadStrategy(
+        pp_size=pp_deg,
+        tp_size=1,
+        sp_size=1,
+        dp_size=gpu_num//pp_deg,
+        dp_type=DPType.ZERO2,
+    )
+    other_cost = EmbeddingLMHeadMemoryCostModel(
+        strategy=embedding_lmhead_strategy,
+        global_batch_size=bsz,
+        chunks=bsz//mbsz,
+        model_args=model_args_list[0],
+        train_args=train_args_list[0],
+        parallel_args=parallel_args_list[0],
+        profile_model_args=profile_model_args_list[0],
+    ).get_memory_cost()['enc_total']
+    # other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
+                                #  model_args=model_args_list[0], train_args=train_args_list[0], parallel_args=parallel_args_list[0], profile_model_args=profile_model_args_list[0]).get_memory_cost()['other'][1]
+    # print(other_cost)
+    # print(layer_min_memcost, other_cost)
+    min_memcost_all_layers = []
+    for i in range(layer_type_num):
+        min_memcost_all_layers += [layer_min_memcost[i]] * layer_num[i]
+    # print(min_memcost_all_layers)
+    avg_mem_cost = (np.sum(min_memcost_all_layers) + np.sum(other_cost)) / pp_deg
+    # print(min_memcost_all_layers, other_cost)
+    # print('Avg memcost:', avg_mem_cost)
 
-def get_pp_stage_for_bsz(strategies, model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num_list, bsz, mbsz_dict, single_layer_even=True):
+    pp_divide = [0] * pp_deg
+    mem_cost_per_stage = other_cost.copy()
+    idx = 0
+    for i in range(pp_deg):
+        while True:
+            if idx >= len(min_memcost_all_layers):
+                break
+            if i < pp_deg - 1 and avg_mem_cost - mem_cost_per_stage[i] < 0.5 * min_memcost_all_layers[idx]:
+                break
+            else:
+                mem_cost_per_stage[i] += min_memcost_all_layers[idx]
+                idx += 1
+                pp_divide[i] += 1
+
+    # Avoid too much memory cost on previous stages
+    for i in range(pp_deg - 1):
+        left, right = int(np.sum(pp_divide[:i])), int(np.sum(pp_divide[:i+1]))
+        mem_cost_cur_stage = np.sum(min_memcost_all_layers[left:right]) + other_cost[i]
+        while mem_cost_cur_stage > avg_mem_cost * 1.3:
+            pp_divide[i] -= 1
+            pp_divide[i+1] += 1
+            right -= 1
+            mem_cost_cur_stage -= min_memcost_all_layers[right]
+
+    # Avoid no layers on previous stages
+    for i in range(pp_deg-1):
+        while pp_divide[i] <= 0:
+            pp_divide[i] += 1
+            pp_divide[i+1] -= 1
+
+    # Avoid no layers on last stage
+    for i in range(pp_deg-1, 0, -1):
+        while pp_divide[i] <= 0:
+            pp_divide[i] += 1
+            pp_divide[i-1] -= 1
+    
+    mem_cost_per_stage_adjusted = other_cost.copy()
+    # print(pp_divide)
+    # print(other_cost, avg_mem_cost)
+    for i in range(pp_deg):
+        left, right = int(np.sum(pp_divide[:i])), int(np.sum(pp_divide[:i+1]))
+        mem_cost_per_stage_adjusted[i] +=  np.sum(min_memcost_all_layers[left:right])
+    # print(mem_cost_per_stage,mem_cost_per_stage_adjusted)
+    return pp_divide, mem_cost_per_stage_adjusted
+
+def get_pp_stage_for_bsz(strategies:List[LayerStrategy], model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num_list, bsz, mbsz_dict, single_layer_even=True):
     pp_stage_dict = dict()
-    pp_deg_list = sorted(list(set([s[0] for s in strategies])))
+    pp_deg_list = sorted(list(set([s.pp_size for s in strategies])))
     for pp_deg in pp_deg_list:
         if single_layer_even and len(layer_num_list) == 1:
             pp_divide = pp_division_even(layer_num_list, pp_deg)
@@ -1066,19 +1090,3 @@ def pp_division_even(layernum_list, pp_deg):
     last_layer_num = total_layer_num - avg_layer_num * (pp_deg-1)
     pp_division = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
     return pp_division
-    
-def optimal_chunk_func_default(local_bsz, strategy, microbatch_size, min_tp):
-    # if strategy[0] == 1:
-    #     return 1
-    assert(strategy[1] % min_tp == 0)
-    local_bsz = local_bsz // (strategy[1] // min_tp)
-    chunk = np.ceil(local_bsz / microbatch_size)
-    chunk = 1 if chunk == 0 else chunk
-    # chunk = int(min(max_chunk,chunk))
-    return chunk
-
-def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz, mbsz_dict, min_tp):
-    chunk_dict = {}
-    for pp_deg in sorted(set([s[0] for s in strategies])):
-        chunk_dict[pp_deg] = optimal_chunk_func(bsz / (world_size // pp_deg // min_tp), [pp_deg, min_tp, world_size // pp_deg, {'fsdp':0, 'cpt':0}], mbsz_dict[pp_deg], min_tp)
-    return chunk_dict

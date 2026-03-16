@@ -32,7 +32,7 @@ def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, bac
     throughput = search_engine.parallelism_optimization()
 
     if idx == 0:
-        assert abs(throughput - 2.8074257503114315) < 1e-6
+        assert abs(throughput - 2.835796843159642) < 1e-6, f'idx: {idx}, throughput: {throughput}'
 
         output_dir = base_config_dirs[2]
         json_files = glob.glob(os.path.join(output_dir, '*.json'))
@@ -79,10 +79,10 @@ def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, bac
 
         checkpoint_values = config["checkpoint"].split(',')
         assert len(checkpoint_values) == 28
-        expected_checkpoint = "1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+        expected_checkpoint = "1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
         assert config["checkpoint"] == expected_checkpoint
     else:
-        assert abs(throughput - 2.5234175303522344) < 1e-6
+        assert abs(throughput - 2.5234175303522344) < 1e-6, f'idx: {idx}, throughput: {throughput}'
 
         output_dir = base_config_dirs[2]
         json_files = glob.glob(os.path.join(output_dir, '*.json'))

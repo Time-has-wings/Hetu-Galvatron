@@ -31,7 +31,7 @@ def config_from_meta(model_type) -> LlamaConfig:
     if "n_kv_heads" not in params:
         params["n_kv_heads"] = None
     if "ffn_dim" not in params:
-        if model_type.startswith("qwen"):
+        if isinstance(model_type, str) and model_type.startswith("qwen"):
             params["ffn_dim"] = params["dim"] * 5.5 
         else:
             params["ffn_dim"] = (

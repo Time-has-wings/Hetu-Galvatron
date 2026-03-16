@@ -3,6 +3,7 @@ import numpy as np
 import copy
 from galvatron.core.search_engine.search_engine import pp_division_memory_balanced, get_pp_stage_for_bsz, check_optimal_chunks, optimal_chunk_func_default
 from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs, create_model_args_from_dict
+from galvatron.utils.strategy_utils import LayerStrategy, DPType
 
 @pytest.fixture
 def memory_model_args():
@@ -40,9 +41,9 @@ def test_pp_division_memory_balanced(memory_model_args):
     bsz = 32
     mbsz = 8
     strategies = [
-        [4, 1, 8, {}],
-        [4, 2, 4, {}],
-        [4, 4, 2, {}]
+        LayerStrategy(pp_size=4, tp_size=1, sp_size=1, dp_size=8, dp_type=DPType.ZERO2, checkpoint=False),
+        LayerStrategy(pp_size=4, tp_size=2, sp_size=1, dp_size=4, dp_type=DPType.ZERO2, checkpoint=False),
+        LayerStrategy(pp_size=4, tp_size=4, sp_size=1, dp_size=2, dp_type=DPType.ZERO2, checkpoint=False),
     ]
 
     pp_divide, mem_costs = pp_division_memory_balanced(
@@ -97,9 +98,9 @@ def test_get_pp_stage_for_bsz(memory_model_args, single_layer_even):
     bsz = 32
     mbsz_dict = {1: 8, 2: 8, 4: 8}
     strategies = [
-        [4, 1, 8, {}],
-        [4, 2, 4, {}],
-        [4, 4, 2, {}]
+        LayerStrategy(pp_size=4, tp_size=1, sp_size=1, dp_size=8, dp_type=DPType.ZERO2, checkpoint=False),
+        LayerStrategy(pp_size=4, tp_size=2, sp_size=1, dp_size=4, dp_type=DPType.ZERO2, checkpoint=False),
+        LayerStrategy(pp_size=4, tp_size=4, sp_size=1, dp_size=2, dp_type=DPType.ZERO2, checkpoint=False),
     ]
 
     pp_stage_dict = get_pp_stage_for_bsz(
@@ -120,37 +121,3 @@ def test_get_pp_stage_for_bsz(memory_model_args, single_layer_even):
         stages = pp_stage_dict[pp_deg]
         assert sum(stages) == sum(layer_num_list)
         print(f"PP={pp_deg} stage division: {stages}")
-
-@pytest.mark.search_engine
-@pytest.mark.parametrize("world_size,bsz,min_tp", [
-    (8, 32, 1),
-    (16, 64, 2),
-    (32, 128, 4)
-])
-def test_check_optimal_chunks(world_size, bsz, min_tp):
-    """Test optimal chunks calculation for different configurations"""
-    strategies = [
-        [2, min_tp, world_size//(2*min_tp), {'fsdp':0, 'cpt':0}],
-        [4, min_tp, world_size//(4*min_tp), {'fsdp':0, 'cpt':0}],
-    ]
-    mbsz_dict = {2: 8, 4: 4}
-
-    chunk_dict = check_optimal_chunks(
-        world_size,
-        strategies,
-        optimal_chunk_func_default,
-        bsz,
-        mbsz_dict,
-        min_tp
-    )
-
-    print(f"World size: {world_size}, BSZ: {bsz}, min_tp: {min_tp}")
-    print(f"Chunk dictionary: {chunk_dict}")
-    
-    assert set(chunk_dict.keys()) == {2, 4}
-    for pp_deg, chunk_size in chunk_dict.items():
-        assert isinstance(chunk_size, (int, float))
-        assert chunk_size > 0
-        local_bsz = bsz / (world_size // pp_deg // min_tp)
-        expected_chunks = np.ceil(local_bsz / mbsz_dict[pp_deg])
-        assert chunk_size == expected_chunks

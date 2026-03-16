@@ -34,10 +34,17 @@ class SearchArgs:
         self.disable_sdp: int = 0
         self.disable_ckpt: int = 0
         self.disable_tp_consec: int = 0
+        self.disable_sp: int = 0
+        self.disable_cp: int = 1 # TODO: set default to 0 later
+        self.disable_fsdp: int = 0
+        self.disable_embedding_lmhead_tp: int = 0
+        self.disable_embedding_lmhead_sp: int = 0
     
         # Parallel degree limits
         self.max_tp_deg: int = 8
         self.max_pp_deg: int = 8
+        self.max_sp_deg: int = 8
+        self.max_cp_deg: int = 8
         
         # Parallel settings
         self.default_dp_type: str = "ddp"

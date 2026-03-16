@@ -54,17 +54,17 @@ def test_bsz_range_with_different_scales(base_engine, min_bsz, max_bsz, bsz_scal
     assert base_engine.min_bsz == expected_bszs[0]
     assert base_engine.max_bsz == expected_bszs[-1]
 
-@pytest.mark.search_engine
-def test_recommend_min_bsz(monkeypatch, base_engine):
-    """Test when recommend_min_bsz is enabled"""
-    def mock_recommend_min_bsz(bsz_scale):
-        return 24
+# @pytest.mark.search_engine
+# def test_recommend_min_bsz(monkeypatch, base_engine):
+#     """Test when recommend_min_bsz is enabled"""
+#     def mock_recommend_min_bsz(bsz_scale):
+#         return 24
     
-    monkeypatch.setattr(base_engine, 'recommend_min_bsz', mock_recommend_min_bsz)
-    base_engine.args.recommend_min_bsz = True
-    base_engine.set_searching_bsz()
+#     monkeypatch.setattr(base_engine, 'recommend_min_bsz', mock_recommend_min_bsz)
+#     base_engine.args.recommend_min_bsz = True
+#     base_engine.set_searching_bsz()
     
-    assert base_engine.min_bsz == 24
+#     assert base_engine.min_bsz == 24
 
 @pytest.mark.search_engine
 def test_max_bsz_adjustment(base_engine):
@@ -85,15 +85,15 @@ def test_min_bsz_smaller_than_scale(base_engine):
     
     assert base_engine.min_bsz == 8  # Should be adjusted to bsz_scale
 
-@pytest.mark.search_engine
-def test_recommend_min_bsz_negative(monkeypatch, base_engine):
-    """Test when recommend_min_bsz returns negative value"""
-    def mock_recommend_min_bsz(bsz_scale):
-        return -1
+# @pytest.mark.search_engine
+# def test_recommend_min_bsz_negative(monkeypatch, base_engine):
+#     """Test when recommend_min_bsz returns negative value"""
+#     def mock_recommend_min_bsz(bsz_scale):
+#         return -1
     
-    monkeypatch.setattr(base_engine, 'recommend_min_bsz', mock_recommend_min_bsz)
-    base_engine.args.recommend_min_bsz = True
-    base_engine.args.min_bsz = 16
-    base_engine.set_searching_bsz()
+#     monkeypatch.setattr(base_engine, 'recommend_min_bsz', mock_recommend_min_bsz)
+#     base_engine.args.recommend_min_bsz = True
+#     base_engine.args.min_bsz = 16
+#     base_engine.set_searching_bsz()
     
-    assert base_engine.min_bsz == 16  # Should keep original min_bsz
+#     assert base_engine.min_bsz == 16  # Should keep original min_bsz

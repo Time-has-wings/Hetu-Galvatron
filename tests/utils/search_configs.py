@@ -562,7 +562,8 @@ def write_time_config(
         "sequence": create_sequence_time_config
     }[profile_mode]()
     
-    with open(configs_dir / f"computation_profiling_{precision}_{model_name}.json", "w") as f:
+    # Search engine expects filename with _all suffix (see search_engine.py time_profiling_path)
+    with open(configs_dir / f"computation_profiling_{precision}_{model_name}_all.json", "w") as f:
         json.dump(time_config, f)
 
 def write_memory_config(
@@ -580,7 +581,8 @@ def write_memory_config(
         "sequence": create_sequence_memory_config_sp,
     }[profile_mode]()
     
-    with open(configs_dir / f"memory_profiling_{precision}_{model_name}.json", "w") as f:
+    # Search engine expects filename with _all suffix (see search_engine.py memory_profiling_path)
+    with open(configs_dir / f"memory_profiling_{precision}_{model_name}_all.json", "w") as f:
         json.dump(memory_config, f)
 
 def write_hardware_config(
@@ -615,12 +617,17 @@ def initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backen
     # Setup search engine
     args = SearchArgs()
     model_layer_configs, model_name = ModelFactory.get_meta_configs(model_type, backend)
+    print("this is ok")
+    print(model_type)
     config_json = ConfigFactory.get_config_json(model_type)
+    print(config_json)
+    print("this is ok2")
     args.model_size = config_json
     args.local_rank = 0
     args.log_dir = base_log_dirs
     config = ModelFactory.create_config(model_type, backend, args)
-
+    print(config)
+    print("this is ok3")
     # Set profiling paths and modes
     args.time_profiling_path = str(configs_dir)
     args.memory_profiling_path = str(configs_dir)

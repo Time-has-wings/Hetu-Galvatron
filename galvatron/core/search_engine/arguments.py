@@ -56,7 +56,7 @@ def galvatron_search_args(parser):
         "--disable_tp", type=int, default=0, help="Whether to disable tp."
     )
     group.add_argument(
-        "--disable_cp", type=int, default=1, help="Whether to disable cp." # TODO set default to 0 later
+        "--disable_cp", type=int, default=1, help="Whether to disable cp." # TODO: set default to 0 later
     )
     group.add_argument(
         "--disable_sp", type=int, default=0, help="Whether to disable sp."
