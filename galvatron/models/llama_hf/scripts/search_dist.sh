@@ -55,14 +55,14 @@ SEARCH_ARGS="
     --default_dp_type zero2 \
 "
 
-BACKGROUND=1
+BACKGROUND=${BACKGROUND:-1}
 
 if [ $BACKGROUND -eq 1 ]; then
     echo "Search in background..."
-    if [ ! -d "log" ]; then
-        mkdir -p "log"
+    if [ ! -d "logs" ]; then
+        mkdir -p "logs"
     fi
-    OUTPUT_FILE="log/Search_${MODEL_SIZE}_${MEMORY}GB_${NUM_NODES}Nodes_${NUM_GPUS_PER_NODE}GPUs_per_node_${SEQ}_${FINE_GRAINED}.log"
+    OUTPUT_FILE="logs/Search_${MODEL_SIZE}_${MEMORY}GB_${NUM_NODES}Nodes_${NUM_GPUS_PER_NODE}GPUs_per_node_${SEQ}_${FINE_GRAINED}.log"
     nohup python3 search_dist.py ${SEARCH_ARGS} 1> ${OUTPUT_FILE} 2>&1 &
 else
     echo "Search in foreground..."

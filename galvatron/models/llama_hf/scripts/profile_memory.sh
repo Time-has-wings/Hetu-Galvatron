@@ -18,7 +18,7 @@ MODEL_ARGS="
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_attention_heads 32 \
-    --seq_length 2048"
+    --seq_length 1024"
 
 # profile_flow_control: scripts_only, launch_only, data_only, all
 # profile_unit: attention, mlp, all
@@ -26,7 +26,7 @@ PROFILE_ARGS_BF16="
     --profile_mode static \
     --profile_type memory \
     --profile_batch_size 8 \
-    --profile_seq_length_list 4096 \
+    --profile_seq_length_list 1024 \
     --layernum_min 1 \
     --layernum_max 2 \
     --max_tp_deg 8 \

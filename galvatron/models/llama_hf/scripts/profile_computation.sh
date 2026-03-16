@@ -25,7 +25,7 @@ MODEL_ARGS="
 PROFILE_ARGS="
     --profile_mode batch \
     --profile_type computation \
-    --profile_seq_length_list 2048 \
+    --profile_seq_length_list 1024 \
     --profile_min_batch_size 1 \
     --profile_max_batch_size 12 \
     --profile_batch_size_step 1 \

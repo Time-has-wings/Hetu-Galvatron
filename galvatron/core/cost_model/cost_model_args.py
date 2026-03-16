@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable, Union
 import numpy as np
 
-
 @dataclass
 class ModelArgs:
     parameter_size: int = 48

@@ -56,7 +56,19 @@ def galvatron_search_args(parser):
         "--disable_tp", type=int, default=0, help="Whether to disable tp."
     )
     group.add_argument(
+        "--disable_cp", type=int, default=1, help="Whether to disable cp." # TODO set default to 0 later
+    )
+    group.add_argument(
+        "--disable_sp", type=int, default=0, help="Whether to disable sp."
+    )
+    group.add_argument(
         "--disable_vtp", type=int, default=0, help="Whether to disable vocab tp."
+    )
+    group.add_argument(
+        "--disable_embedding_lmhead_tp", type=int, default=0, help="Whether to disable embedding lmhead tp."
+    )
+    group.add_argument(
+        "--disable_embedding_lmhead_sp", type=int, default=0, help="Whether to disable embedding lmhead sp."
     )
     group.add_argument(
         "--disable_pp", type=int, default=0, help="Whether to disable pp."
@@ -68,6 +80,9 @@ def galvatron_search_args(parser):
         "--disable_ckpt", type=int, default=0, help="Whether to disable checkpoint"
     )
     group.add_argument(
+        "--disable_fsdp", type=int, default=0, help="Whether to disable fsdp."
+    )
+    group.add_argument(
         "--disable_tp_consec", type=int, default=0, help="Whether to disable tp_consec."
     )
     group.add_argument(
@@ -75,6 +90,12 @@ def galvatron_search_args(parser):
     )
     group.add_argument(
         "--max_pp_deg", type=int, default=8, help="Maximum pipeline parallel degree to search."
+    )
+    group.add_argument(
+        "--max_sp_deg", type=int, default=8, help="Maximum sequence parallel degree to search."
+    )
+    group.add_argument(
+        "--max_cp_deg", type=int, default=8, help="Maximum checkpoint parallel degree to search."
     )
     group.add_argument(
         "--default_dp_type", type=str, default="ddp", help="Default data parallel type", choices=["ddp","zero2"],
