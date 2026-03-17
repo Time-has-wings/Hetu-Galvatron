@@ -62,7 +62,7 @@ def wrap_data_parallel(
         assert pp_device is not None
         from galvatron.core import get_args
 
-        fsdp_type_dict = {0: get_args().default_dp_type, 1: "zero3"}
+        fsdp_type_dict = {0: get_args().parallel.default_dp_type, 1: "zero3"}
         assert dp_type in fsdp_type_dict.keys()
         return wrap_module_fsdp_manually(
             module,
@@ -127,13 +127,13 @@ def wrap_module_fsdp_manually(
 
     mixed_precision_policy = MixedPrecision(
         param_dtype=mixed_precision,  # Param precision
-        reduce_dtype=torch.float if args.reduce_in_fp32 else mixed_precision,  # Gradient communication precision
+        reduce_dtype=torch.float if args.parallel.reduce_in_fp32 else mixed_precision,  # Gradient communication precision
         buffer_dtype=mixed_precision,  # Buffer precision
         cast_forward_inputs=False,
         cast_root_forward_inputs=False,
     )
-    forward_prefetch = True if is_moe_model else False # For MoE model, we explicitly prefetch the parameters
-    backward_prefetch = None if pp_on else BackwardPrefetch.BACKWARD_PRE
+    forward_prefetch = True # Always explicitly prefetch
+    # backward_prefetch = None if pp_on else BackwardPrefetch.BACKWARD_PRE
     fsdp_args = dict(
         process_group=comm_group,
         sharding_strategy=sharding_strategy,
@@ -143,9 +143,9 @@ def wrap_module_fsdp_manually(
         device_id=pp_device,
         param_init_fn=(
             partial(
-                param_init_fn, all_block_name, args.load, args.distributed_checkpoint, tp_groups.group, None, load_module_func
+                param_init_fn, all_block_name, args.ckpt.load, args.ckpt.distributed_checkpoint, tp_groups.group, None, load_module_func
             )
-            if args.initialize_on_meta
+            if args.model.initialize_on_meta
             else None
         ),
         limit_all_gathers=True,
@@ -163,9 +163,9 @@ def wrap_module_fsdp_manually(
                     device_id=pp_device,
                     param_init_fn=(
                         partial(
-                            param_init_fn, all_block_name, args.load, args.distributed_checkpoint, tp_of_ep_groups.group, ep_groups.group, load_module_func
+                            param_init_fn, all_block_name, args.ckpt.load, args.ckpt.distributed_checkpoint, tp_of_ep_groups.group, ep_groups.group, load_module_func
                         )
-                        if args.initialize_on_meta
+                        if args.model.initialize_on_meta
                         else None
                     ),
                     limit_all_gathers=True,
@@ -328,7 +328,7 @@ def wrap_modules_data_parallel(
     from galvatron.core import get_args
 
     args = get_args()
-    pp_on = True if args.pp_deg > 1 else False
+    pp_on = True if args.parallel.pp_deg > 1 else False
     # pp_on = True if process_group.size < torch.distributed.get_world_size() else False
 
     if pp_devices is not None:
@@ -351,23 +351,23 @@ def wrap_modules_data_parallel(
             ep_groups=ep_groups[i] if ep_groups is not None else None,
             all_block_name=all_block_name,
             load_module_func=load_module_func,
-            is_moe_model=args.is_moe_model,
+            is_moe_model=args.model.is_moe_model,
         )
     args = get_args()
     sharding_strategy = {
         "ddp": ShardingStrategy.NO_SHARD,
         "zero2": ShardingStrategy.SHARD_GRAD_OP,
         "zero3": ShardingStrategy.FULL_SHARD,
-    }[args.default_dp_type]
+    }[args.parallel.default_dp_type]
     mixed_precision_policy = MixedPrecision(
         param_dtype=mixed_precision,  # Param precision
-        reduce_dtype=torch.float if args.reduce_in_fp32 else mixed_precision,  # Gradient communication precision
+        reduce_dtype=torch.float if args.parallel.reduce_in_fp32 else mixed_precision,  # Gradient communication precision
         buffer_dtype=mixed_precision,  # Buffer precision
         cast_forward_inputs=False,
         cast_root_forward_inputs=False, # For rotary embedding
     )
-    forward_prefetch = True if args.is_moe_model else False # For MoE model, we explicitly prefetch the parameters
-    backward_prefetch = None if pp_on else BackwardPrefetch.BACKWARD_PRE
+    forward_prefetch = True# Always explicitly prefetch
+    # backward_prefetch = None if pp_on else BackwardPrefetch.BACKWARD_PRE
     # Wrap router paramter into root FSDP with WORLD process group so that the grad of router can be reduce-scatter correctly
     fsdp_args = dict(
         process_group=process_group,
@@ -377,54 +377,14 @@ def wrap_modules_data_parallel(
         # backward_prefetch=backward_prefetch,
         device_id=pp_devices[0],
         param_init_fn=(
-            partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint, None, None, load_module_func)
-            if args.initialize_on_meta
+            partial(param_init_fn, all_block_name, args.ckpt.load, args.ckpt.distributed_checkpoint, None, None, load_module_func)
+            if args.model.initialize_on_meta
             else None
         ),
         limit_all_gathers=True,
     )
     module_list = FSDP(module_list, **fsdp_args)
     return module_list
-
-
-def wrap_model_data_parallel(
-    model,
-    device,
-    wrap_block_names=[],
-    dp_type="ddp",
-    mixed_precision=torch.bfloat16,
-    comm_group=None,
-    initialize_on_meta=False,
-    backward_prefetch=True,
-):
-    assert dp_type in ["ddp", "zero2", "zero3"]
-    sharding_strategy = {
-        "ddp": ShardingStrategy.NO_SHARD,
-        "zero2": ShardingStrategy.SHARD_GRAD_OP,
-        "zero3": ShardingStrategy.FULL_SHARD,
-    }[dp_type]
-    mixed_precision_policy = MixedPrecision(
-        param_dtype=mixed_precision,  # Param precision
-        reduce_dtype=torch.float if args.reduce_in_fp32 else mixed_precision,  # Gradient communication precision
-        buffer_dtype=mixed_precision,  # Buffer precision
-        cast_forward_inputs=True,
-        cast_root_forward_inputs=True,
-    )
-    backward_prefetch = BackwardPrefetch.BACKWARD_PRE if backward_prefetch else None
-    fsdp_args = dict(
-        process_group=comm_group,
-        sharding_strategy=sharding_strategy,
-        mixed_precision=mixed_precision_policy,
-        # backward_prefetch=backward_prefetch,
-        device_id=device,
-        param_init_fn=param_init_fn if initialize_on_meta else None,
-        limit_all_gathers=True,
-    )
-    # Wrap specified blocks
-    model = apply_fsdp(model, fsdp_args, wrap_block_names)
-    # Wrap whole model
-    model = FSDP(model, **fsdp_args)
-    return model
 
 
 def modules_to_devices(module_list, pp_devices):

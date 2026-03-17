@@ -371,15 +371,15 @@ class GalvatronSearchEngine():
             sp_search_speace = [2]
 
         if self.args.disable_sdp:
-            total_embed_sdp = [0]
+            total_vocab_sdp = [0]
         else:
-            total_embed_sdp = [0, 1]
+            total_vocab_sdp = [0, 1]
 
-        def search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp):
+        def search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp):
             log_dir = self.args.log_dir + '/%s_%dnodes_%dgpus_%dGB'%(self.model_name, self.args.num_nodes, self.args.num_gpus_per_node, self.memory_constraint//1024)
             log_dir = ensure_log_dir(log_dir)
-            logger = get_thread_logger(bsz, chunk, min_tp, max_tp, vsp, embed_sdp, log_dir)
-            logger.info(f"Starting search for bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}")
+            logger = get_thread_logger(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp, log_dir)
+            logger.info(f"Starting search for bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, vocab_sdp={vocab_sdp}")
 
             results = dict()
             
@@ -419,7 +419,7 @@ class GalvatronSearchEngine():
 
                 pp_stage_dict = get_pp_stage_for_bsz(strategies, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.layernum_list, bsz, mbsz_dict)
                 
-                results[sp_search] = self.dynamic_programming(strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, embed_sdp, sp_search, logger)
+                results[sp_search] = self.dynamic_programming(strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, vocab_sdp, sp_search, logger)
                 results[sp_search]['pp_stage_dict'] = copy.deepcopy(pp_stage_dict)
                 # min_res_list, min_pp_deg, throughput = results[min_tp][max_tp][vsp][sp_search]['min_res_list'], results[min_tp][max_tp][vsp][sp_search]['min_pp_deg'], results[min_tp][max_tp][vsp][sp_search]['throughput']
             return results
@@ -448,9 +448,9 @@ class GalvatronSearchEngine():
                             results[bsz][chunk][min_tp][max_tp] = dict()
                             for vsp in total_vsp:
                                 results[bsz][chunk][min_tp][max_tp][vsp] = dict()
-                                for embed_sdp in total_embed_sdp:
-                                    results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = dict()
-                                    all_tasks.append((bsz, chunk, min_tp, max_tp, vsp, embed_sdp))
+                                for vocab_sdp in total_vocab_sdp:
+                                    results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp] = dict()
+                                    all_tasks.append((bsz, chunk, min_tp, max_tp, vsp, vocab_sdp))
             
             results_lock = threading.Lock()
 
@@ -462,16 +462,16 @@ class GalvatronSearchEngine():
                 num_threads = min(multiprocessing.cpu_count() * 2, len(all_tasks))
             print(f"Starting parallel search with {num_threads} threads for {len(all_tasks)} tasks...")
             
-            def process_task(bsz, chunk, min_tp, max_tp, vsp, embed_sdp):
+            def process_task(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp):
                 thread_id = threading.get_ident() % 1000
-                print(f"[Thread {thread_id:03d}] Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}", flush=True)
+                print(f"[Thread {thread_id:03d}] Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, vocab_sdp={vocab_sdp}", flush=True)
 
-                chunk_results = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp)
+                chunk_results = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp)
                 with results_lock:
-                    results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = copy.deepcopy(chunk_results)
+                    results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp] = copy.deepcopy(chunk_results)
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = [executor.submit(process_task, bsz, chunk, min_tp, max_tp, vsp, embed_sdp) for bsz, chunk, min_tp, max_tp, vsp, embed_sdp in all_tasks]
+                futures = [executor.submit(process_task, bsz, chunk, min_tp, max_tp, vsp, vocab_sdp) for bsz, chunk, min_tp, max_tp, vsp, vocab_sdp in all_tasks]
                 concurrent.futures.wait(futures)
         else:
             for bsz in self.BSZs:
@@ -492,20 +492,20 @@ class GalvatronSearchEngine():
                             results[bsz][chunk][min_tp][max_tp] = dict()
                             for vsp in total_vsp:
                                 results[bsz][chunk][min_tp][max_tp][vsp] = dict()
-                                for embed_sdp in total_embed_sdp:
-                                    print(f"Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}", flush=True)
+                                for vocab_sdp in total_vocab_sdp:
+                                    print(f"Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, vocab_sdp={vocab_sdp}", flush=True)
 
-                                    results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp)
+                                    results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp] = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp)
 
         for bsz in results:
             for chunk in results[bsz]:
                 for min_tp in results[bsz][chunk]:
                     for max_tp in results[bsz][chunk][min_tp]:
                         for vsp in results[bsz][chunk][min_tp][max_tp]:
-                            for embed_sdp in results[bsz][chunk][min_tp][max_tp][vsp]:
-                                for sp_search in results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp]:
-                                    throughput = results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp][sp_search]['throughput']
-                                    pp_stage_dict = results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp][sp_search]['pp_stage_dict']
+                            for vocab_sdp in results[bsz][chunk][min_tp][max_tp][vsp]:
+                                for sp_search in results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp]:
+                                    throughput = results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp][sp_search]['throughput']
+                                    pp_stage_dict = results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp][sp_search]['pp_stage_dict']
                                     if throughput > max_throughput:
                                         max_throughput = throughput
                                         optimal_bsz = bsz
@@ -513,16 +513,16 @@ class GalvatronSearchEngine():
                                         optimal_min_tp = min_tp
                                         optimal_max_tp = max_tp
                                         optimal_vsp = vsp
-                                        optimal_embed_sdp = embed_sdp
+                                        optimal_vocab_sdp = vocab_sdp
                                         optimal_sp_search = sp_search
                                         optimal_pp_stage_dict = pp_stage_dict
 
         if max_throughput > 0:
             print('\nFinal results of max memory %d MB:'%self.memory_constraint)
-            re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_embed_sdp][optimal_sp_search]
+            re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_vocab_sdp][optimal_sp_search]
             re['vsp'] = optimal_vsp
-            re['embed_sdp'] = optimal_embed_sdp
-            print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Optimal embed sdp = {optimal_embed_sdp} Max throughput={re['throughput']} samples/s")
+            re['vocab_sdp'] = optimal_vocab_sdp
+            print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Optimal embed sdp = {optimal_vocab_sdp} Max throughput={re['throughput']} samples/s")
             print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
             print(f"Min_tp={optimal_min_tp} Max_tp={optimal_max_tp} ")
             print_strategies(re['min_res_list'])
@@ -598,7 +598,7 @@ class GalvatronSearchEngine():
             bsz += scale
         return max_bsz
 
-    def dynamic_programming(self, strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, embed_sdp, sp_search, logger):
+    def dynamic_programming(self, strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, vocab_sdp, sp_search, logger):
         args = self.args
         logger.info(f'bsz={bsz} {pp_stage_dict}')
         dp_on_model = DpOnModel(strategies, 
@@ -622,12 +622,12 @@ class GalvatronSearchEngine():
                                 config = self.args,
                                 logger=logger)
         
-        logger.info(f"****Searching with bsz={bsz} chunk={chunk} min_tp={min_tp} max_tp={max_tp} vsp={vsp} embed_sdp={embed_sdp} sp_search={sp_search}****")
+        logger.info(f"****Searching with bsz={bsz} chunk={chunk} min_tp={min_tp} max_tp={max_tp} vsp={vsp} vocab_sdp={vocab_sdp} sp_search={sp_search}****")
         chunk_dict = check_optimal_chunks(args.gpu_num, strategies, self.optimal_chunk_func, bsz, mbsz_dict, min_tp)
         logger.info(f'Chunk_dict for bsz {bsz}: {chunk_dict}')
         logger.info(f'Mbsz_dict for bsz {bsz}: {mbsz_dict}')
         
-        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, vsp, embed_sdp, sp_search, mbsz_dict = mbsz_dict)
+        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, vsp, vocab_sdp, sp_search, mbsz_dict = mbsz_dict)
         throughput = bsz / min_cost
         logger.info(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Vocab tp={min_vtp}")
         logger.info(f"Max throughput={throughput} samples/s")
@@ -657,9 +657,9 @@ class GalvatronSearchEngine():
             config['default_dp_type'] = args.default_dp_type
             config['vtp'] = re['vtp']
             config['vsp'] = re['vsp']
-            config['embed_sdp'] = re['embed_sdp']
-            # if args.embed_sdp:
-            #     config['embed_sdp'] = 1
+            config['vocab_sdp'] = re['vocab_sdp']
+            # if args.vocab_sdp:
+            #     config['vocab_sdp'] = 1
             
             mixed_precision = '_%s'%args.mixed_precision
             settle_bsz = '_bsz%d'%args.settle_bsz if args.settle_bsz > 0 else ''
@@ -920,7 +920,7 @@ class GalvatronSearchEngine():
         print('Pipeline Type:', self.args.pipeline_type)
         print('Default DP Type:', self.args.default_dp_type)
         print('Mixed Precision:', self.args.mixed_precision)
-        # if self.args.embed_sdp:
+        # if self.args.vocab_sdp:
         #     print('Embedding SDP: ON')
         print('Search Space:')
         print_strategies(self.strategies)

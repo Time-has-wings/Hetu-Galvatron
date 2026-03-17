@@ -14,39 +14,40 @@ def get_pp_ranks_enc(pp_divide):
     return pp_ranks_enc
 
 
-def get_hybrid_parallel_configs_api(config, args, model_info):
+def get_hybrid_parallel_configs_api(args, model_info):
     local_rank = args.local_rank
     world_size = torch.distributed.get_world_size()
-    config_type = "JSON" if args.galvatron_config_path not in [None, "None"] else "GLOBAL"
-    layernum_list = model_info(config, args).layernums()#[config.num_hidden_layers]
+    parallel_args = args.parallel
+    config_type = "JSON" if parallel_args.galvatron_config_path not in [None, "None"] else "GLOBAL"
+    layernum_list = model_info.layernums()
     total_layer_num = sum(layernum_list)
     if local_rank == 0:
         print("======================== Galvatron Parallel Config =============================")
         print("Galvatron parallel config mode: [%s config mode]" % config_type)
     if config_type == "GLOBAL":
-        pp_deg = args.pp_deg
-        tp_sizes_enc = [args.global_tp_deg] * total_layer_num if args.global_tp_deg > 0 else [1] * total_layer_num
+        pp_deg = parallel_args.pp_deg
+        tp_sizes_enc = [parallel_args.global_tp_deg] * total_layer_num if parallel_args.global_tp_deg > 0 else [1] * total_layer_num
         # tp_consecutive_flags = (
         #     [args.global_tp_consec] * total_layer_num if args.global_tp_consec in [0, 1] else [1] * total_layer_num
         # )
         tp_consecutive_flags = [1] * total_layer_num
-        cp_sizes_enc = [args.global_cp_deg] * total_layer_num if args.global_cp_deg > 0 else [1] * total_layer_num
-        dp_types_enc = total_layer_num * [args.sdp]
-        ep_sizes_enc = total_layer_num * [args.global_ep_deg]
-        tp_of_ep_sizes_enc = total_layer_num * [args.global_tp_of_ep_deg]
-        checkpoint_flags_enc = [args.global_checkpoint] * total_layer_num
+        cp_sizes_enc = [parallel_args.global_cp_deg] * total_layer_num if parallel_args.global_cp_deg > 0 else [1] * total_layer_num
+        dp_types_enc = total_layer_num * [parallel_args.sdp]
+        ep_sizes_enc = total_layer_num * [parallel_args.global_ep_deg]
+        tp_of_ep_sizes_enc = total_layer_num * [parallel_args.global_tp_of_ep_deg]
+        checkpoint_flags_enc = [parallel_args.global_checkpoint] * total_layer_num
         pp_divide = None
-        if args.use_ulysses:
-            args.vocab_sp = 1
+        if parallel_args.use_ulysses:
+            parallel_args.vocab_sp = 1
             use_sp = [1] * total_layer_num
         else:
-            args.vocab_sp = 0
+            parallel_args.vocab_sp = 0
             use_sp = [0] * total_layer_num
     else:
-        if isinstance(args.galvatron_config_path, str):
-            galvatron_config = read_json_config(args.galvatron_config_path)
+        if isinstance(parallel_args.galvatron_config_path, str):
+            galvatron_config = read_json_config(parallel_args.galvatron_config_path)
         else:
-            galvatron_config = args.galvatron_config_path
+            galvatron_config = parallel_args.galvatron_config_path
         pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp, vcp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config["global_bsz"], galvatron_config["chunks"]
         checkpoint_flags_enc = (
@@ -55,47 +56,47 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
             else [0] * len(tp_sizes_enc)
         )
         pp_divide = str2array(galvatron_config["pp_division"]) if "pp_division" in galvatron_config.keys() else None
-        if isinstance(args.galvatron_config_path, str):
-            config_source = "Galvatron JSON config %s" % args.galvatron_config_path
+        if isinstance(parallel_args.galvatron_config_path, str):
+            config_source = "Galvatron JSON config %s" % parallel_args.galvatron_config_path
         else:
             config_source = "Galvatron JSON config"
-        args.pipeline_type = (
-            galvatron_config["pipeline_type"] if "pipeline_type" in galvatron_config.keys() else args.pipeline_type
+        parallel_args.pipeline_type = (
+            galvatron_config["pipeline_type"] if "pipeline_type" in galvatron_config.keys() else parallel_args.pipeline_type
         )
-        args.default_dp_type = (
+        parallel_args.default_dp_type = (
             galvatron_config["default_dp_type"]
             if "default_dp_type" in galvatron_config.keys()
-            else args.default_dp_type
+            else parallel_args.default_dp_type
         )
-        args.embed_sdp = galvatron_config["embed_sdp"] if "embed_sdp" in galvatron_config.keys() else args.embed_sdp
+        parallel_args.vocab_sdp = galvatron_config["vocab_sdp"] if "vocab_sdp" in galvatron_config.keys() else parallel_args.vocab_sdp
         if local_rank == 0 and (
-            total_layer_num != len(tp_sizes_enc) or args.chunks != chunks or args.global_train_batch_size != bsz
+            total_layer_num != len(tp_sizes_enc) or args.train.chunks != chunks or args.train.global_batch_size != bsz
         ):
             print("[Notice] The following hyper-parameters will be overwritten by Galvatron %s config:" % config_type)
-            if args.global_train_batch_size != bsz:
+            if args.train.global_batch_size != bsz:
                 print("   global_batch_size =", bsz)
-            if args.chunks != chunks:
+            if args.train.chunks != chunks:
                 print("   chunks =", chunks)
         if total_layer_num != len(tp_sizes_enc):
-            assert (False, "Layer_num in json config does not match layer_num in the model!")
-        args.global_train_batch_size = bsz
-        args.chunks = chunks
-        args.pp_deg = pp_deg
-        args.vocab_tp = vtp
-        args.vocab_sp = vsp
-        args.vocab_cp = vcp
+            assert False, "Layer_num in json config does not match layer_num in the model!"
+        args.train.global_batch_size = bsz
+        args.train.chunks = chunks
+        parallel_args.pp_deg = pp_deg
+        parallel_args.vocab_tp = vtp
+        parallel_args.vocab_sp = vsp
+        parallel_args.vocab_cp = vcp
     if pp_divide is None:
         avg_layer_num = total_layer_num // pp_deg
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg - 1)
         pp_divide = [avg_layer_num] * (pp_deg - 1) + [last_layer_num]
     pp_ranks_enc = get_pp_ranks_enc(pp_divide)
-    min_tp = min(min(tp_sizes_enc), args.vocab_tp)
-    min_cp = min(min(cp_sizes_enc), args.vocab_cp)
+    min_tp = min(min(tp_sizes_enc), parallel_args.vocab_tp)
+    min_cp = min(min(cp_sizes_enc), parallel_args.vocab_cp)
     assert (
-        args.global_train_batch_size % (world_size // pp_deg // min_tp // min_cp) == 0
-    ), "global_train_batch_size should be multiple of world_size//pp_deg//min_tp//min_cp!"
+        args.train.global_batch_size % (world_size // pp_deg // min_tp // min_cp) == 0
+    ), "global_batch_size should be multiple of world_size//pp_deg//min_tp//min_cp!"
     hybrid_parallel_configs = {
-        "is_moe_model": args.is_moe_model,
+        "is_moe_model": args.model.is_moe_model,
         "pp_deg": pp_deg,
         "tp_sizes_enc": tp_sizes_enc,
         "tp_consecutive_flags": tp_consecutive_flags,
@@ -107,15 +108,15 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         "pp_ranks_enc": pp_ranks_enc,
         "pp_division": pp_divide,
         "use_sp": use_sp,
-        "vocab_tp": args.vocab_tp,
-        "vocab_sp": args.vocab_sp,
-        "vocab_cp": args.vocab_cp,
-        "default_dp_type": args.default_dp_type,
-        "global_train_batch_size": args.global_train_batch_size,
+        "vocab_tp": parallel_args.vocab_tp,
+        "vocab_sp": parallel_args.vocab_sp,
+        "vocab_cp": parallel_args.vocab_cp,
+        "default_dp_type": parallel_args.default_dp_type,
+        "global_batch_size": args.train.global_batch_size,
     }
 
-    if args.distributed_checkpoint:
-        json_path = os.path.join(args.load, f"hybrid_parallel_configs.json")
+    if args.ckpt.distributed_checkpoint:
+        json_path = os.path.join(args.ckpt.load, f"hybrid_parallel_configs.json")
         checkponit_hybrid_parallel_configs = json.load(open(json_path, "r"))
         assert (
             hybrid_parallel_configs.keys() == checkponit_hybrid_parallel_configs.keys()
@@ -131,36 +132,40 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     if local_rank == 0:
         if config_type == "GLOBAL":
             print("[GLOBAL config mode] Loaded global hybrid parallel strategy:")
-            dp_type = "sdp" if args.sdp else "dp"
+            dp_type = "sdp" if parallel_args.sdp else "dp"
             tp_deg, tp_consec = tp_sizes_enc[0], tp_consecutive_flags[0]
             cp_deg = cp_sizes_enc[0]
-            dp_deg = world_size // args.global_tp_deg // args.pp_deg // args.global_cp_deg
-            print("   global_batch_size: %d, chunks: %d" % (args.global_train_batch_size, get_chunks(args)))
+            dp_deg = world_size // parallel_args.global_tp_deg // parallel_args.pp_deg // parallel_args.global_cp_deg
+            print("   global_batch_size: %d, chunks: %d" % (args.train.global_batch_size, get_chunks(args)))
             print(
                 "   pp_deg: %d, tp_deg: %d, %s_deg: %d, cp_deg: %d, tp_consecutive_flag: %d, checkpoint_flag: %d"
-                % (pp_deg, tp_deg, dp_type, dp_deg, cp_deg, tp_consec, args.global_checkpoint)
+                % (pp_deg, tp_deg, dp_type, dp_deg, cp_deg, tp_consec, parallel_args.global_checkpoint)
             )
-            if args.is_moe_model:
-                print("   ep_deg: %d, tp_of_ep_deg: %d" % (args.global_ep_deg, args.global_tp_of_ep_deg))
-            embed_sdp = ", embed_sdp: 1" if args.embed_sdp else ""
+            if args.model.is_moe_model:
+                print("   ep_deg: %d, tp_of_ep_deg: %d" % (parallel_args.global_ep_deg, parallel_args.global_tp_of_ep_deg))
             print(
-                "   pipeline_type: %s, default_dp_type: %s, dtype: %s%s"
-                % (args.pipeline_type, args.default_dp_type, args.mixed_precision, embed_sdp)
+                "   pipeline_type: %s, default_dp_type: %s, dtype: %s"
+                % (parallel_args.pipeline_type, parallel_args.default_dp_type, parallel_args.mixed_precision)
             )
+            print(
+                "vocab_tp: %d, vocab_sp: %d, vocab_cp: %d, vocab_sdp: %d"
+                % (parallel_args.vocab_tp, parallel_args.vocab_sp, parallel_args.vocab_cp, parallel_args.vocab_sdp))
             print_hp_config("pp_division", pp_divide)
             print_hp_config("pp_ranks", pp_ranks_enc)
-            print_hp_config("use_sp", [args.use_ulysses])
+            print_hp_config("use_sp", [parallel_args.use_ulysses])
             print("================================================================================")
         else:
             print("[%s config mode] Loaded hybrid parallel config from %s:" % (config_type, config_source))
             print(
-                "   global_batch_size: %d, chunks: %d, pp_deg: %d" % (args.global_train_batch_size, args.chunks, pp_deg)
+                "   global_batch_size: %d, chunks: %d, pp_deg: %d" % (args.train.global_batch_size, args.train.chunks, pp_deg)
             )
-            embed_sdp = ", embed_sdp: 1" if args.embed_sdp else ""
             print(
-                "   pipeline_type: %s, default_dp_type: %s, dtype: %s%s"
-                % (args.pipeline_type, args.default_dp_type, args.mixed_precision, embed_sdp)
+                "   pipeline_type: %s, default_dp_type: %s, dtype: %s"
+                % (parallel_args.pipeline_type, parallel_args.default_dp_type, parallel_args.mixed_precision)
             )
+            print(
+                "vocab_tp: %d, vocab_sp: %d, vocab_cp: %d, vocab_sdp: %d"
+                % (parallel_args.vocab_tp, parallel_args.vocab_sp, parallel_args.vocab_cp, parallel_args.vocab_sdp))
             print_hp_configs(hybrid_parallel_configs)
     return hybrid_parallel_configs
 
@@ -237,7 +242,7 @@ def print_hp_configs(hp_configs):
     print("================================================================================")
 
 
-def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0, vocab_cp=1):
+def hp_config_whole_model(module_types, hp_configs, vocab_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0, vocab_cp=1):
     pp_deg, tp_sizes_enc, ep_sizes_enc, tp_of_ep_sizes_enc, use_sp, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc, cp_sizes_enc = (
         hp_configs["pp_deg"],
         hp_configs["tp_sizes_enc"],
@@ -293,7 +298,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
                 hp_configs_whole["sp_sizes_whole"].append(1)
             # hp_configs_whole["cp_sizes_whole"].append(cp_sizes_enc[idx_enc] if idx_enc < len(cp_sizes_enc) else cp_sizes_enc[-1]) 
             hp_configs_whole["cp_sizes_whole"].append(vocab_cp)
-            hp_configs_whole["dp_types_whole"].append(embed_sdp) # embed_sdp: Apply SDP (zero-3) for Embeddings and cls
+            hp_configs_whole["dp_types_whole"].append(vocab_sdp) # vocab_sdp: Apply SDP (zero-3) for Embeddings and cls
             hp_configs_whole["pp_ranks_whole"].append(
                 pp_ranks_enc[idx_enc] if idx_enc < len(pp_ranks_enc) else pp_ranks_enc[-1]
             )
@@ -368,13 +373,13 @@ def layer_shapes_dtypes_whole_model(module_types, layernum_list, layer_shapes_li
 
 
 def get_chunks(args):
-    if args.chunks == -1:
-        args.chunks = 1
-        if args.pp_deg > 1:
+    if args.train.chunks == -1:
+        args.train.chunks = 1
+        if args.parallel.pp_deg > 1:
             world_size = torch.distributed.get_world_size()
-            max_dp_deg = world_size // args.pp_deg
-            local_bsz = args.global_train_batch_size // max_dp_deg
+            max_dp_deg = world_size // args.parallel.pp_deg
+            local_bsz = args.train.global_batch_size // max_dp_deg
             optimal_micro_bsz = np.ceil(local_bsz / 4)
             optimal_micro_bsz = 1 if optimal_micro_bsz == 0 else optimal_micro_bsz
-            args.chunks = int(optimal_micro_bsz)
-    return args.chunks
+            args.train.chunks = int(optimal_micro_bsz)
+    return args.train.chunks

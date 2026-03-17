@@ -63,7 +63,7 @@ def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, bac
         assert config["default_dp_type"] == "zero2"
         assert config["vtp"] == 8
         assert config["vsp"] == 0
-        assert config["embed_sdp"] == 0
+        assert config["vocab_sdp"] == 0
 
         array_fields = {
             "tp_sizes_enc": "8",
@@ -113,7 +113,7 @@ def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, bac
         assert config["default_dp_type"] == "zero2"
         assert config["vtp"] == 1
         assert config["vsp"] == 0
-        assert config["embed_sdp"] == 1
+        assert config["vocab_sdp"] == 1
 
         array_fields = {
             "tp_sizes_enc": "1",

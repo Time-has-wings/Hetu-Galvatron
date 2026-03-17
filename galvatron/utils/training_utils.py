@@ -23,7 +23,7 @@ def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None, gro
     return trainloader
 
 def print_loss(args, loss, ep, iter):
-    if args.check_loss or args.profile:
+    if args.print_loss or args.profile:
         if loss is None:
             return
         if isinstance(loss, (list, tuple)): # Average loss of each microbatch

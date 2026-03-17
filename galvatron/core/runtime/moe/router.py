@@ -6,10 +6,10 @@ from typing import Callable
 
 import torch
 
-from megatron.core import parallel_state
-from megatron.core.tensor_parallel import gather_from_sequence_parallel_region
-from megatron.core.transformer.module import MegatronModule
-from megatron.core.transformer.moe.moe_utils import (
+from galvatron.core.runtime import parallel_state
+from galvatron.core.runtime.args_schema import GalvatronModelArgs
+from galvatron.core.runtime.tensor_parallel.mappings import gather_from_sequence_parallel_region
+from galvatron.core.runtime.moe.moe_utils import (
     MoEAuxLossAutoScaler,
     save_to_aux_losses_tracker,
     sequence_load_balancing_loss_func,
@@ -18,20 +18,18 @@ from megatron.core.transformer.moe.moe_utils import (
     topk_softmax_with_capacity,
     z_loss_func,
 )
-from megatron.core.transformer.transformer_config import TransformerConfig
 
-
-class Router(ABC, MegatronModule):
+class Router(ABC, torch.nn.Module):
     """Base Router class"""
 
-    def __init__(self, config: TransformerConfig) -> None:
+    def __init__(self, config: GalvatronModelArgs) -> None:
         """
         Initialize the Router module.
 
         Args:
-            config (TransformerConfig): Configuration object for the Transformer model.
+            config (GalvatronModelArgs): Configuration object for the Transformer model.
         """
-        super().__init__(config)
+        super().__init__()
         self.config = config
         self.num_experts = self.config.num_moe_experts
         self.moe_aux_loss_func = None
@@ -42,10 +40,8 @@ class Router(ABC, MegatronModule):
         self.weight = torch.nn.Parameter(
             torch.empty((self.config.num_moe_experts, self.config.hidden_size), dtype=torch.float32)
         )
-        if config.perform_initialization:
-            config.init_method(self.weight)
         self.weight.data = self.weight.data.to(dtype=config.params_dtype)
-        setattr(self.weight, 'sequence_parallel', config.sequence_parallel)
+        # setattr(self.weight, 'sequence_parallel', config.sequence_parallel)
         # If calculate per token loss, we need to scale up moe aux loss by the number of tokens.
         # So we need to know if the model is configured to calculate per token loss.
         self.calculate_per_token_loss = self.config.calculate_per_token_loss
@@ -102,11 +98,11 @@ class Router(ABC, MegatronModule):
 class TopKRouter(Router):
     """Route each token to the top-k experts."""
 
-    def __init__(self, config: TransformerConfig) -> None:
+    def __init__(self, config: GalvatronModelArgs) -> None:
         """Initialize the zero token dropping router.
 
         Args:
-            config (TransformerConfig): The configuration for the transformer model.
+            config (GalvatronModelArgs): The configuration for the transformer model.
         """
         super().__init__(config=config)
         self.iter = 0

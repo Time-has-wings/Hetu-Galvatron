@@ -41,7 +41,7 @@ class SearchArgs:
         
         # Parallel settings
         self.default_dp_type: str = "ddp"
-        self.embed_sdp: int = 0
+        self.vocab_sdp: int = 0
         self.mixed_precision: str = "bf16"
         self.pipeline_type: str = "gpipe"
     

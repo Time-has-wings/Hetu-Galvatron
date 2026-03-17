@@ -10,7 +10,7 @@ class RuntimeArgs:
         self.global_tp_deg = 1
         self.global_tp_consec = 1
         self.sdp = 0
-        self.embed_sdp = 0
+        self.vocab_sdp = 0
         self.global_checkpoint = 0
         self.vocab_tp = 1
         self.vocap_sp = 0

@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 import numpy as np
 import torch
 from torch import Tensor, nn
@@ -7,17 +9,18 @@ from .comm_groups import gen_comm_groups
 from .hybrid_parallel_config import (
     check_hp_config,
     get_chunks,
-    get_enc_groups,
     hp_config_whole_model,
     layer_shapes_dtypes_whole_model,
     mixed_precision_dtype,
 )
+from galvatron.core.runtime.models.builder import build_sequential_from_arch
 from .initialize import init_empty_weights
 from .parallel import wrap_modules_relocation
 from .pipeline.grad_reduce import _finalize_params_bf16, _register_post_backward_hook_bf16
-from .utils import get_layernorm_offset
+from galvatron.core.runtime.utils.utils import get_layernorm_offset
+from galvatron.core.runtime.utils.utils import print_rank_0
 
-from megatron.core.tensor_parallel.random import set_seed_with_group
+from galvatron.core.runtime.tensor_parallel.random import set_seed_with_group
 
 version_str = torch.__version__
 version_major, version_minor, _ = version_str.split(".")
@@ -56,17 +59,17 @@ class GalvatronModel(nn.Module):
             loss_func = self.fake_loss_func
             assert isinstance(batch, (tuple, list))
             batch = [batch, [self.fake_tensor(batch[0])]]
-        if args.pp_deg > 1:
-            if args.pipeline_type == "gpipe":
+        if args.parallel.pp_deg > 1:
+            if args.parallel.pipeline_type == "gpipe":
                 loss = model.gpipe_forward(batch, loss_func, **kwargs)
                 if profiler is not None:
                     profiler.profile_memory(self.iter, "After Forward")
                 model.gpipe_backward()
-            elif args.pipeline_type == "pipedream_flush":
+            elif args.parallel.pipeline_type == "pipedream_flush":
                 loss = model.pipedream_flush_forward_backward(batch, loss_func, **kwargs)
         else:
-            loss = model.no_pipeline_forward_backward(
-                batch, loss_func, forward_only=args.profile_forward, profiler=profiler, iter=self.iter, **kwargs
+                loss = model.no_pipeline_forward_backward(
+                batch, loss_func, forward_only=args.profile.profile_forward, profiler=profiler, iter=self.iter, **kwargs
             )
         self.iter += 1
         return self.loss_to_cpu(loss)
@@ -90,38 +93,43 @@ class GalvatronModel(nn.Module):
         return loss
 
 def construct_hybrid_parallel_model_api(
-    model,
-    model_config,
-    training_args,
+    arch_list: List[str],
+    args,
     hybrid_parallel_configs,
     model_info,
-    construct_sequential_model,
-    construct_tensor_parallel_model,
-    wrap_block_name=None,
-    wrap_checkpoint_block_name=None,
-    wrap_other_block_name=None,
+    block_names,
+    layernorm_name: Optional[List[str]] = None,
     tied_wte_attr_names=None,
-    layernorm_name=[],
-    all_block_name=None,
     load_module_func=None,
     meta_init_buffer=True,
 ):
-    if wrap_checkpoint_block_name == None:
-        wrap_checkpoint_block_name = wrap_block_name
-    config, args, hp_configs = model_config, training_args, hybrid_parallel_configs
+    """Build a hybrid-parallel model from an architecture list.
 
-    if args.mixed_precision == "bf16":
+    Args:
+        arch_list: Module type sequence, e.g.
+            ``["embedding", "decoder", "decoder", ..., "prenorm", "lm_head"]``.
+        args: Galvatron args (with ``args.model``, ``args.train``, ``args.parallel``).
+        hybrid_parallel_configs: From ``get_hybrid_parallel_configs_api``.
+        layernorm_name: Substrings used to find LayerNorm modules for SP allreduce.
+            ``None`` = auto (covers common names).
+        tied_wte_attr_names: Attribute names for weight-tied embedding / lm_head.
+        load_module_func: Optional checkpoint loading callback.
+        meta_init_buffer: Whether to init buffers on meta device.
+    """
+
+    hp_configs = hybrid_parallel_configs
+
+    if args.parallel.mixed_precision == "bf16":
         assert version_major > 1 and version_minor > 0, "Mixed precision training is only supported for torch > 2.0.1"
         fsdp._runtime_utils._register_post_backward_hook = _register_post_backward_hook_bf16
         fsdp._runtime_utils._finalize_params = _finalize_params_bf16
     # Get model-specific model info: module_types, layernum_list, layer_shapes_list, layer_dtypes_list
-    model_info = model_info(config, args)
     module_types = model_info.module_types()
     layernum_list = model_info.layernums()
     layer_shapes_list = model_info.shapes()
     layer_dtypes_list = model_info.dtypes()
 
-    # Check the validity of hp_configs (encoders only)
+    # Check the validity of hp_configs
     check_hp_config(hp_configs, layernum_list)
 
     # Calculate shapes and dtypes for whole model (including embed/cls/... layers)
@@ -131,10 +139,16 @@ def construct_hybrid_parallel_model_api(
 
     # Get hp_configs_whole for the whole model (including embed/cls/... layers)
     hp_configs_whole = hp_config_whole_model(
-        module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp=args.vocab_tp, vocab_sp=args.vocab_sp, vocab_cp=args.vocab_cp
+        module_types, hp_configs,
+        vocab_sdp=args.parallel.vocab_sdp,
+        embed_ckpt=0,
+        vocab_tp=args.parallel.vocab_tp,
+        vocab_sp=args.parallel.vocab_sp,
+        vocab_cp=args.parallel.vocab_cp,
     )
 
     # [Step 0] Generate communication groups
+    print_rank_0("Generating communication groups...")
     (
         pp_group,
         tp_groups_whole,
@@ -152,7 +166,7 @@ def construct_hybrid_parallel_model_api(
         split_tp_sp_cp_groups_whole,
         fused_allgather_groups_whole,
         fused_split_groups_whole,
-        embedding_group
+        embedding_group,
     ) = gen_comm_groups(
         hp_configs_whole["tp_sizes_whole"],
         hp_configs_whole["sp_sizes_whole"],
@@ -165,58 +179,50 @@ def construct_hybrid_parallel_model_api(
         show_rank=0,
     )
 
-    # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
-    use_hf = args.shape_order == "SBH"
-    model_args = {
-        "model": model,
-        "config": config,
-        "tp_groups_enc": tp_groups_whole,
-    }
-    if use_hf:
-        model_args.update({
-            "sp_groups_enc": sp_groups_whole,
-            "cp_groups_enc": cp_groups_whole,
-        })
-        set_seed_with_group(
-            tp_groups=tp_groups_whole,
-            tp_and_ep_groups=tp_and_ep_groups_whole,
-        )
-    if hp_configs_whole["is_moe_model"]:
-        model_args.update({
-            "ep_groups_enc": ep_groups_whole,
-            "tp_of_ep_groups_enc": tp_of_ep_groups_whole,
-            "tp_and_ep_groups_enc": tp_and_ep_groups_whole,
-        })
-    if args.initialize_on_meta and use_hf:
-        with init_empty_weights(meta_init_buffer):
-            model = construct_tensor_parallel_model(**model_args)
-    elif use_hf:
-        model = construct_tensor_parallel_model(**model_args)
-    else:
-        # TODO: FA model does not support cp!
-        assert not args.use_ulysses, "FA model does not support ulysses!"
-        if hp_configs_whole["is_moe_model"]:
-            assert False, "FA model does not support MoE!"
-        model = construct_tensor_parallel_model(**model_args)
+    assert args.model.shape_order == "SBH", "Shape order must be SBH for hybrid parallel model!"
 
-    # [Step 2] Construct Sequantial model using model-specific sequential function
-    if args.initialize_on_meta and args.shape_order == "SBH":
+    set_seed_with_group(
+        tp_groups=tp_groups_whole,
+        tp_and_ep_groups=tp_and_ep_groups_whole,
+    )
+
+    # [Step 1 - 2] Construct TP & Sequantial model using model-specific sequential function
+    print_rank_0("Constructing TP & Sequantial model using model-specific sequential function...")
+    if args.model.initialize_on_meta:
         with init_empty_weights(meta_init_buffer):
-            model = construct_sequential_model(model, config)
+            model = build_sequential_from_arch(
+                arch_list, args, 
+                tp_groups_whole, 
+                sp_groups_whole, 
+                cp_groups_whole,
+                ep_groups_whole,
+                tp_of_ep_groups_whole,
+                tp_and_ep_groups_whole,
+            )
     else:
-        model = construct_sequential_model(model, config)
+        model = build_sequential_from_arch(
+            arch_list, args, 
+            tp_groups_whole, 
+            sp_groups_whole, 
+            cp_groups_whole,
+            ep_groups_whole,
+            tp_of_ep_groups_whole,
+            tp_and_ep_groups_whole,
+        )
 
     # [Step 3] Wrap Relocation modules if necessary
+    print_rank_0("Wrapping Relocation modules if necessary...")
     model = wrap_modules_relocation(
-        model, allgather_cp_groups_whole, allgather_tp_sp_cp_groups_whole, 
-        split_cp_groups_whole, split_tp_sp_cp_groups_whole, 
-        fused_allgather_groups_whole, fused_split_groups_whole
+        model, allgather_cp_groups_whole, allgather_tp_sp_cp_groups_whole,
+        split_cp_groups_whole, split_tp_sp_cp_groups_whole,
+        fused_allgather_groups_whole, fused_split_groups_whole,
     )
     ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
     assert len(ln_offset) == len(dp_groups_whole)
 
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.runtime.pipeline import PipelineParallel
+    print_rank_0("Constructing Pipeline Module and placing the layers on corresponding devices...")
     hp_model = PipelineParallel(
         model=model,
         model_ranks=hp_configs_whole["pp_ranks_whole"],
@@ -240,13 +246,13 @@ def construct_hybrid_parallel_model_api(
         seq_data_groups_whole,
         module_types=module_types,
         dp_of_ep_groups=dp_of_ep_groups_whole,
-        mixed_precision=mixed_precision_dtype(args.mixed_precision),
-        wrap_block_name=wrap_block_name,
-        wrap_other_block_name=wrap_other_block_name,
+        mixed_precision=mixed_precision_dtype(args.parallel.mixed_precision),
+        wrap_block_name=block_names.wrap_block_name,
+        wrap_other_block_name=block_names.wrap_other_block_name,
         tp_groups=tp_groups_whole,
         tp_of_ep_groups=tp_of_ep_groups_whole,
         ep_groups=ep_groups_whole,
-        all_block_name=all_block_name,
+        all_block_name=block_names.all_block_name,
         load_module_func=load_module_func,
     )
 
@@ -255,16 +261,16 @@ def construct_hybrid_parallel_model_api(
         layer_tp_groups=tp_groups_whole,
         ln_offset=ln_offset,
         ln_size=ln_size,
-        all_block_name=all_block_name,
+        all_block_name=block_names.all_block_name,
     )
 
     # [Step 6] Wrap checkpoint based on checkpoint_flags
+    print_rank_0("Wrapping checkpoint based on checkpoint_flags...")
     hp_model.wrap_pipeline_modules_checkpoint(
-        hp_configs_whole["checkpoint_flags_whole"], wrap_block_name=wrap_checkpoint_block_name
+        hp_configs_whole["checkpoint_flags_whole"], wrap_block_name=block_names.wrap_checkpoint_block_name
     )
 
     model = GalvatronModel(hp_model)
-
     model.dp_groups_whole = dp_groups_whole
     model.tp_groups_whole = tp_groups_whole
     model.sp_groups_whole = sp_groups_whole
