@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from galvatron.utils import config2strategy, read_json_config, str2array
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs, GalvatronParallelArgs, GalvatronModelArgs
 
 def get_pp_ranks_enc(pp_divide):
     pp_ranks_enc = []
@@ -14,13 +15,16 @@ def get_pp_ranks_enc(pp_divide):
     return pp_ranks_enc
 
 
-def get_hybrid_parallel_configs_api(args, model_info):
+def get_hybrid_parallel_configs_api(args:GalvatronRuntimeArgs):
     local_rank = args.local_rank
     world_size = torch.distributed.get_world_size()
-    parallel_args = args.parallel
+
+    parallel_args:GalvatronParallelArgs = args.parallel
+    model_args:GalvatronModelArgs = args.model
+
     config_type = "JSON" if parallel_args.galvatron_config_path not in [None, "None"] else "GLOBAL"
-    layernum_list = model_info.layernums()
-    total_layer_num = sum(layernum_list)
+    total_layer_num = model_args.num_layers
+
     if local_rank == 0:
         print("======================== Galvatron Parallel Config =============================")
         print("Galvatron parallel config mode: [%s config mode]" % config_type)
@@ -169,36 +173,6 @@ def get_hybrid_parallel_configs_api(args, model_info):
             print_hp_configs(hybrid_parallel_configs)
     return hybrid_parallel_configs
 
-
-class ModelInfo:
-    def __init__(self):
-        return
-
-    def set_layernums(self, info):
-        self.layernum_list = info
-
-    def set_shapes(self, info):
-        self.layer_shapes_list = info
-
-    def set_dtypes(self, info):
-        self.layer_dtypes_list = info
-
-    def set_module_types(self, info):
-        self.layer_module_types = info
-
-    def layernums(self):
-        return self.layernum_list
-
-    def shapes(self):
-        return self.layer_shapes_list
-
-    def dtypes(self):
-        return self.layer_dtypes_list
-
-    def module_types(self):
-        return self.layer_module_types
-
-
 def check_hp_config(hp_configs, layernum_list):
     pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = (
         hp_configs["pp_deg"],
@@ -314,7 +288,7 @@ def hp_config_whole_model(module_types, hp_configs, vocab_sdp=0, embed_ckpt=0, v
         world_size // pp_deg // tp_size // sp_size // cp_size
         for tp_size, sp_size, cp_size in zip(hp_configs_whole["tp_sizes_whole"], hp_configs_whole["sp_sizes_whole"], hp_configs_whole["cp_sizes_whole"])
     ]
-    from galvatron.core import get_args
+    from galvatron.core.runtime.parallel_state import get_args
 
     if get_args().local_rank == 0:
         print("Model Layer Types:")
@@ -338,7 +312,7 @@ def get_enc_groups(groups_whole, module_types):
             groups.append(groups_whole[i])
     return groups
 
-
+# TODO: Move elsewhere
 def mixed_precision_dtype(mixed_precision):
     return {"fp32": torch.float, "fp16": torch.float16, "bf16": torch.bfloat16}[mixed_precision]
 

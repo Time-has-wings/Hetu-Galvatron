@@ -15,7 +15,7 @@ from galvatron.core.runtime.args_schema import GalvatronModelArgs
 from galvatron.core.runtime.tensor_parallel.utils import divide
 from galvatron.core.runtime.moe import grouped_gemm_util as gg
 from galvatron.core.runtime.transformer.fused_kernels import bias_geglu_impl, bias_gelu_impl, bias_swiglu_impl
-from galvatron.core.runtime.tensor_parallel.mlp import MLP, MLPSubmodules
+from galvatron.core.runtime.transformer.mlp import MLP, MLPSubmodules
 from galvatron.core.runtime.tensor_parallel.mappings import (
     gather_from_sequence_parallel_region,
     copy_to_tensor_model_parallel_region,
@@ -29,7 +29,13 @@ class GroupedMLP(torch.nn.Module):
     Executes multiple experts in parallel to maximize computational efficiency.
     """
 
-    def __init__(self, num_local_experts: int, config: GalvatronModelArgs, tp_of_ep_group: dist.ProcessGroup = None):
+    def __init__(
+        self, 
+        num_local_experts: int, 
+        config: GalvatronModelArgs, 
+        tp_of_ep_group: dist.ProcessGroup = None,
+        layer_idx: int = None,
+    ):
         super().__init__()
         self.config: GalvatronModelArgs = config
         self.num_local_experts = num_local_experts
@@ -88,6 +94,8 @@ class GroupedMLP(torch.nn.Module):
             )
         )
 
+        self.layer_idx = layer_idx
+
     def forward(self, permuted_local_hidden_states: torch.Tensor, tokens_per_expert: torch.Tensor):
         """Forward step of the GroupedMLP."""
         if permuted_local_hidden_states.nelement() != 0:
@@ -130,6 +138,7 @@ class SequentialMLP(torch.nn.Module):
         submodules: MLPSubmodules, 
         tp_of_ep_group: dist.ProcessGroup = None,
         tp_and_ep_group: dist.ProcessGroup = None,
+        layer_idx:int = None,
     ):
 
         if config.moe_ffn_hidden_size == config.ffn_hidden_size:
@@ -149,6 +158,8 @@ class SequentialMLP(torch.nn.Module):
         for _ in range(self.num_local_experts):
             expert = MLP(expert_config, submodules, is_expert=True, tp_group = tp_of_ep_group, tp_and_ep_group = tp_and_ep_group)
             self.local_experts.append(expert)
+        
+        self.layer_idx = layer_idx
 
     def _pad_tensor_for_fp8(self, hidden):
         """Padding tensor shape to multiples of 16."""
