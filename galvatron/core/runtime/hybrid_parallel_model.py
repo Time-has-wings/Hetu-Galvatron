@@ -174,7 +174,6 @@ def construct_hybrid_parallel_model_api(
         hp_configs_whole["ep_sizes_whole"],
         hp_configs_whole["tp_of_ep_sizes_whole"],
         hp_configs_whole["pp_deg"],
-        hp_configs_whole["tp_consec_whole"],
         is_moe_model=hp_configs_whole["is_moe_model"],
         show_rank=0,
     )
