@@ -23,4 +23,4 @@ torchrun \
   --nnodes=$NNODES \
   --nproc-per-node=$NPROC_PER_NODE \
   --node-rank=$NODE_RANK \
-  $additional_args train_dist.py scripts/train_dist.yaml "$@" 2>&1 | tee log.txt
+  $additional_args train_dist.py scripts/train_dist.yaml "$@" 2>&1 | tee runtime.log
