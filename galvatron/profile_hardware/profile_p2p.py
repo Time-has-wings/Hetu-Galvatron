@@ -1,104 +1,21 @@
-import torch
-from torch import nn
-from torch.optim import Adam
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data.distributed import DistributedSampler
-import numpy as np
-import random
-from tqdm import tqdm
-import time
 import os
-import sys
-from typing import Tuple, List
+import random
+import time
 import argparse
+from typing import Optional, Tuple, Union, List
 
-import galvatron
-from galvatron.core.runtime.pipeline import PipelineParallel, PipeSequential
-from galvatron.core.runtime.comm_groups import gen_comm_groups
+import numpy as np
+import torch
+from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
+
 from galvatron.utils import read_json_config, write_json_config
-
-def init_method_constant(val):
-    def init_(tensor):
-        return torch.nn.init.constant_(tensor, val)
-    return init_
-
-class pre_sync_module(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.linear = nn.Linear(1, 1)
-    
-    def forward(self, hidden_states):
-        return hidden_states
-
-class pre_mlp(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.linear = nn.Linear(1024, 1024)
-
-    def forward(self, hidden_states):
-        hidden_states = self.linear(hidden_states)
-        return hidden_states
-
-def _reduce(input_, group):
-    """All-reduce the the input tensor across model parallel group."""
-
-    # Bypass the function if we are using only 1 GPU.
-    if torch.distributed.get_world_size(group=group)==1:
-        return input_
-
-    # All-reduce.
-    torch.distributed.all_reduce(input_.contiguous(), group=group)
-
-    return input_
-
-class _ReduceFromModelParallelRegion(torch.autograd.Function):
-    """All-reduce the input from the model parallel region."""
-    
-    @staticmethod
-    def forward(ctx, input_, group):
-        return _reduce(input_, group)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output, None
-
-class _CopyToModelParallelRegion(torch.autograd.Function):
-    """Pass the input to the model parallel region."""
-    
-    @staticmethod
-    def forward(ctx, input_, group):
-        ctx.group = group
-        return input_
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return _reduce(grad_output, ctx.group), None
-
-def reduce_from_tensor_model_parallel_region_group(input_, group):
-    return _ReduceFromModelParallelRegion.apply(input_, group)
-
-def copy_to_tensor_model_parallel_region_group(input_, group):
-    return _CopyToModelParallelRegion.apply(input_, group)
-
-class allreduce_block(nn.Module):
-    def __init__(self, tp_group):
-        super().__init__()
-        self.tp_group = tp_group
-        self.linear = nn.Linear(1024, 1024)
-
-    def forward(self, hidden_states):
-        hidden_states = copy_to_tensor_model_parallel_region_group(hidden_states, self.tp_group.group)
-        hidden_states = reduce_from_tensor_model_parallel_region_group(hidden_states, self.tp_group.group)
-        hidden_states = hidden_states.requires_grad_(True)
-        return hidden_states
+from galvatron.core.runtime.comm_groups import build_rank_to_parallel_coords, get_groups, CommGroup
 
 class DataLoaderRandom(Dataset):
-    def __init__(self, local_bsz):
-        # world_size = torch.distributed.get_world_size()
-        self.dataset_size = local_bsz*11
-        # self.input = np.random.randint(0, 100, size=(self.dataset_size, 512, 1024))
-        self.input = np.random.rand(*(self.dataset_size, 512, 1024))
+    def __init__(self, dataset_size, seq_length, hidden_size):
+        self.dataset_size = dataset_size
+        self.input = np.random.rand(*(self.dataset_size, seq_length, hidden_size))
 
     def __len__(self):
         return self.dataset_size
@@ -106,14 +23,8 @@ class DataLoaderRandom(Dataset):
     def __getitem__(self, idx):
         if idx >= self.dataset_size:
             raise IndexError
-        input = torch.FloatTensor(self.input[idx])
+        input = torch.FloatTensor(self.input[idx]) # fp32
         return input
-
-def fake_loss_func(labels, outputs):
-    output = outputs[0]
-    loss = output.sum()
-    loss = loss.requires_grad_(True)
-    return loss
 
 def set_seed(rank):
     seed = 123 + rank
@@ -122,13 +33,161 @@ def set_seed(rank):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
+Shape = Union[List[int], torch.Size]
+
+PP_GROUP:CommGroup = None
+
+def set_global_pp_group(pp_group:CommGroup):
+    global PP_GROUP
+    assert PP_GROUP is None, f'pp_group is initialized'
+    PP_GROUP = pp_group
+
+def get_global_pp_group():
+    global PP_GROUP
+    assert PP_GROUP is not None, f'pp_group is not initialized'
+    return PP_GROUP
+
+def get_pipeline_model_parallel_prev_rank():
+    pp_group = get_global_pp_group()
+    curr_idx = pp_group.ranks.index(torch.distributed.get_rank())
+    assert curr_idx != 0, f'rank {torch.distributed.get_rank()} is the first rank'
+    return pp_group.ranks[curr_idx - 1]
+
+def get_pipeline_model_parallel_next_rank():
+    pp_group = get_global_pp_group()
+    curr_idx = pp_group.ranks.index(torch.distributed.get_rank())
+    assert curr_idx != len(pp_group.ranks) - 1, f'rank {torch.distributed.get_rank()} is the last rank'
+    return pp_group.ranks[curr_idx + 1]
+
+def _run_p2pops(
+    tensor_send_prev: Union[torch.Tensor, None],
+    tensor_send_next: Union[torch.Tensor, None],
+    tensor_recv_prev: Union[torch.Tensor, None],
+    tensor_recv_next: Union[torch.Tensor, None],
+):
+    ops = []
+    if tensor_send_prev is not None:
+        send_prev_op = torch.distributed.P2POp(
+            torch.distributed.isend,
+            tensor_send_prev,
+            get_pipeline_model_parallel_prev_rank(),
+        )
+        ops.append(send_prev_op)
+    if tensor_recv_prev is not None:
+        recv_prev_op = torch.distributed.P2POp(
+            torch.distributed.irecv,
+            tensor_recv_prev,
+            get_pipeline_model_parallel_prev_rank(),
+        )
+        ops.append(recv_prev_op)
+    if tensor_send_next is not None:
+        send_next_op = torch.distributed.P2POp(
+            torch.distributed.isend,
+            tensor_send_next,
+            get_pipeline_model_parallel_next_rank(),
+        )
+        ops.append(send_next_op)
+    if tensor_recv_next is not None:
+        recv_next_op = torch.distributed.P2POp(
+            torch.distributed.irecv,
+            tensor_recv_next,
+            get_pipeline_model_parallel_next_rank(),
+        )
+        ops.append(recv_next_op)
+    if len(ops) > 0:
+        reqs = torch.distributed.batch_isend_irecv(ops)
+        for req in reqs:
+            req.wait()
+
+def _communicate(
+    tensor_send_next: Optional[torch.Tensor],
+    tensor_send_prev: Optional[torch.Tensor],
+    recv_prev: bool,
+    recv_next: bool,
+    tensor_shape: Optional[Shape] = None,
+    dtype_: Optional[torch.dtype] = None,
+    *,
+    params_dtype: Optional[torch.dtype] = None,
+    fp32_residual_connection: bool = False,
+) -> Tuple[Union[torch.Tensor, None], Union[torch.Tensor, None]]:
+    # Create placeholder tensors for receive in forward and backward directions if needed.
+    tensor_recv_prev = None
+    tensor_recv_next = None
+    
+    if tensor_shape is None:
+        raise RuntimeError("`tensor_shape` must be specified. Common `tensor_shape` is `(seq_length, micro_batch_size, hidden_size)`")
+
+    tensor_chunk_shape = tensor_shape
+
+    dtype = params_dtype or torch.float
+    if fp32_residual_connection:
+        dtype = torch.float
+    requires_grad = True
+    if dtype_ is not None:
+        dtype = dtype_
+        requires_grad = False
+
+    if recv_prev:
+        tensor_recv_prev = torch.empty(
+            tensor_chunk_shape,
+            requires_grad=requires_grad,
+            device=torch.cuda.current_device(),
+            dtype=dtype,
+        )
+    if recv_next:
+        tensor_recv_next = torch.empty(
+            tensor_chunk_shape,
+            requires_grad=requires_grad,
+            device=torch.cuda.current_device(),
+            dtype=dtype,
+        )
+
+    _run_p2pops(tensor_send_prev, tensor_send_next, tensor_recv_prev, tensor_recv_next)
+
+    torch.cuda.synchronize()
+
+    return tensor_recv_prev, tensor_recv_next
+
+def send_forward(
+    output_tensor: torch.Tensor,
+    tensor_shape: Shape = None,
+    dtype: Optional[torch.dtype] = None
+):
+    _communicate(
+        tensor_send_next=output_tensor.contiguous(),
+        tensor_send_prev=None,
+        recv_prev=False,
+        recv_next=False,
+        tensor_shape=tensor_shape,
+        dtype_=dtype,
+    )
+
+def recv_forward(
+    tensor_shape: Shape,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    input_tensor, _ = _communicate(
+        tensor_send_next=None,
+        tensor_send_prev=None,
+        recv_prev=True,
+        recv_next=False,
+        tensor_shape=tensor_shape,
+        dtype_=dtype,
+    )
+    return input_tensor
+
 def train(args):
     torch.distributed.init_process_group(backend="nccl")
-    local_rank = args.local_rank
+
+    # [Step 0] preparation
     rank = torch.distributed.get_rank()
-    set_seed(rank)
     world_size = torch.distributed.get_world_size()
-    node_num = world_size / args.nproc_per_node
+    local_rank = int(os.environ['LOCAL_RANK'])
+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])  # Env vars set by torchrun
+    nproc_per_node = local_world_size
+    nnodes = world_size // nproc_per_node
+
+    set_seed(rank)
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
 
@@ -137,64 +196,39 @@ def train(args):
     with torch.profiler.profile() as p:
         pass
 
-    pp_deg = args.pp_deg
-    args.num_layers = 48
-    args.local_batch_size = 32
-    args.global_tp_deg = world_size // pp_deg
-    train_batch_size_input = args.local_batch_size
-    if rank == 0:
-        print('local_bsz = %d'%train_batch_size_input)
+    # [Step 1] build pp group
+    name2size = {
+        'pp': args.pp_deg,
+        'dp': 1,
+        'cp': 1,
+        'tsp': world_size // args.pp_deg
+    }
+    order = 'pp-dp-cp-tsp'
+    degree_rank_dict = build_rank_to_parallel_coords(world_size, name2size, order=order)
+    pp_group, _ = get_groups(degree_rank_dict, ignore_keys=['pp'])
+    tp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tsp'])
+    set_global_pp_group(pp_group)
 
-    dataset = DataLoaderRandom(train_batch_size_input)
-    trainloader = DataLoader(dataset=dataset,
-                            batch_size=train_batch_size_input)
+    # [Step 3] build dataset and dataloader
+    warmup_num, active_num = 1, 10
+    dataset = DataLoaderRandom(args.local_batch_size * (warmup_num + active_num), args.seq_length, args.hidden_size)
+    trainloader = DataLoader(dataset=dataset, batch_size=args.local_batch_size)
 
-    all_tp_sizes = [args.global_tp_deg] * 48
-    all_sp_sizes = [1] * 48
-    all_cp_sizes = [1] * 48
-    all_ep_sizes = [1] * 48
-    all_tp_of_ep_sizes = [1] * 48
-    tp_consecutive_flags = [args.global_tp_consec] * 48
-    pp_group, tp_groups, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, all_ep_sizes, all_tp_of_ep_sizes, pp_deg, tp_consecutive_flags)
 
-    model = PipeSequential()
-    model.add_module('pre_sync_module', pre_sync_module())
-    model.add_module('pre_mlp', pre_mlp())
-    for i in range(len(all_tp_sizes)):
-        module = allreduce_block(tp_group=tp_groups[i])
-        model.add_module('mlp_%d'%i, module)
-
-    avg_num_layers = args.num_layers // args.pp_deg
-    pp_ranks = [0, 0]
-    for i in range(args.pp_deg):
-        pp_ranks += [i] * avg_num_layers
-    
-    layer_output_tensor_shapes = [[[-1, 512, 1024]]] * len(pp_ranks)
-    model = model.to(device)
-    model = PipelineParallel(
-                model = model, 
-                model_ranks = pp_ranks, 
-                layer_output_tensor_shapes = layer_output_tensor_shapes, 
-                chunks=1, 
-                process_group = pp_group.ranks, 
-                nproc_per_node=8,
-                info=False)
-
-    optimizer = Adam(model.parameters(), lr=0.01, weight_decay=0.01)
-
-    # Calculate theoretical communication message size
-    pp_size = args.pp_deg
-    # assert tp_size*pp_size*dp_size == 8
-    p2p_message_size = train_batch_size_input*512*1024*4/1024/1024
+    # [Step 4] calculate info
+    fp32_size = 4
+    p2p_message_size = args.local_batch_size * args.seq_length * args.hidden_size * fp32_size / 1024 / 1024
     if local_rank == 0:
-        print('Strategy: pp_deg = %d'%(pp_size))
-        print('[p2p_message_size]: total %d MB'%(p2p_message_size))
+        print(f'Strategy: pp_deg = {args.pp_deg} local_batch_size = {args.local_batch_size} seq_length = {args.seq_length} hidden_size = {args.hidden_size}')
+        print(f'[p2p_message_size]: total {p2p_message_size} MB')
 
+
+    # [Step 5] build trace handler
     def trace_handler(prof):
         try:
             if rank == inter_node_send_rank:
                 table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
-                time.sleep(0.5*model.pp_global_ranks[0])
+                time.sleep(0.5 * pp_group.ranks[0])
                 print('Results of p2p from rank %d to rank %d:'%(inter_node_send_rank, inter_node_recv_rank))
                 print(table)
                 table = table.split('\n')
@@ -215,77 +249,64 @@ def train(args):
                 for line in table:
                     if 'Name' in line:
                         title = split_line(line)
-                    if 'ncclKernel_SendRecv' in line:
+                    if 'SendRecv' in line: # ncclKernel_SendRecv or ncclDevKernel_SendRecv
                         result = split_line(line)
                 for i in range(len(title)):
                     # print('%s: %s'%(title[i],result[i]))
                     if 'CUDA total' in title[i]:
                         cuda_total_idx = i
 
-                p2p_time = str2time(result[cuda_total_idx]) / 10
+                p2p_time = str2time(result[cuda_total_idx]) / active_num
                 comm_coe = p2p_message_size / p2p_time
+
                 comm_coe = torch.tensor([comm_coe]).to(device)
-                
-                torch.distributed.all_reduce(comm_coe, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
-                comm_coe = comm_coe.cpu().numpy()[0] / tp_groups[0].size
-                if 0 in model.pp_global_ranks:
+                torch.distributed.all_reduce(comm_coe, group=tp_group.group, op=torch.distributed.ReduceOp.SUM)
+                comm_coe = comm_coe.cpu().numpy()[0] / tp_group.size
+                if 0 in pp_group.ranks:
                     print('**********')
-                    print('p2p_coe_pp_deg_%d (ms/MB):'%(pp_size), comm_coe)
+                    print(f'p2p_coe_pp_deg_{args.pp_deg}: {comm_coe} MB/ms')
                     print('**********')
                     path = os.path.dirname(os.path.abspath(__file__))
-                    env_config_path = os.path.join(path, './hardware_configs/p2p_bandwidth_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
+                    env_config_path = os.path.join(path, f'./hardware_configs/p2p_bandwidth_{nnodes}nodes_{nproc_per_node}gpus_per_node.json')
                     config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
-                    key = 'pp_size_%d'%(pp_size)
+                    key = f'pp_size_{args.pp_deg}'
                     config[key] = comm_coe
                     write_json_config(config, env_config_path)
                     print('Already written p2p bandwidth into env config file %s!'%(env_config_path))
         except Exception as e:
             print(f"Profiler error: {e}")
             return
-    inter_node_send_rank = model.pp_global_ranks[model.group_size // 2 - 1]
-    inter_node_recv_rank = model.pp_global_ranks[model.group_size // 2]
-    if rank == inter_node_send_rank:
-        print('p2p comm from rank %d to rank %d.'%(inter_node_send_rank, inter_node_recv_rank))
 
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA],
-                                schedule=torch.profiler.schedule(wait=0,warmup=1,active=10),
-                                on_trace_ready=trace_handler) as p:
+    # [Step 6] run profiler
+    inter_node_send_rank = pp_group.ranks[pp_group.size // 2 - 1]
+    inter_node_recv_rank = pp_group.ranks[pp_group.size // 2]
+
+    if rank == inter_node_send_rank:
+        print(f'p2p comm from rank {inter_node_send_rank} to rank {inter_node_recv_rank}.')
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(wait=0,warmup=1,active=10),
+        on_trace_ready=trace_handler
+    ) as p:
         for i, input in enumerate(tqdm(trainloader)):
             input = input.to(device)
             if rank == inter_node_send_rank:
-                model.send_forward(input, tensor_shape=[train_batch_size_input, 512, 1024])
+                send_forward(input, tensor_shape=[args.local_batch_size, args.seq_length, args.hidden_size])
             if rank == inter_node_recv_rank:
-                out = model.recv_forward(tensor_shape=[train_batch_size_input, 512, 1024])
+                out = recv_forward(tensor_shape=[args.local_batch_size, args.seq_length, args.hidden_size])
             p.step()
 
     torch.distributed.barrier()
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--global_tp_deg", type=int, default=-1, help="Global tensor parallel degree."
-    )
-    parser.add_argument(
-        "--global_tp_consec", type=int, default=-1, help="Global tensor parallel group consecutive flag."
-    )
-    parser.add_argument(
-        "--pp_deg", type=int, default=2, help="Pipeline parallel degree."
-    )
-    parser.add_argument(
-        "--local_batch_size", type=int, default=32, help="local training batch size"
-    )
-    parser.add_argument(
-        "--num_layers", type=int, default=24, help="Number of layers"
-    )
-    parser.add_argument("--local-rank" ,type=int,default=-1)
-    parser.add_argument(
-        "--nproc_per_node", type=int, default=-1, help="Nproc per node",
-    )
+    parser.add_argument("--pp_deg", type=int, default=2, help="Pipeline parallel degree.")
+    parser.add_argument("--local_batch_size", type=int, default=32, help="local training batch size")
+    parser.add_argument("--num_layers", type=int, default=48, help="Number of layers")
+    parser.add_argument("--seq_length", type=int, default=512, help="Sequence length")
+    parser.add_argument("--hidden_size", type=int, default=1024, help="Hidden size")
+
     args = parser.parse_args()
-    from megatron.training.global_vars import set_args
-    args.sequence_parallel = False
-    args.shape_order = "SBH"
-    args.use_ulysses = False
-    args.async_grad_reduce = True
-    set_args(args)
     train(args)
