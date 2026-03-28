@@ -1,0 +1,57 @@
+paths:
+  data_path: /path/to/tokenized_dataset
+  tokenizer_model: /path/to/tokenizer_or_hf_model
+  model_config_path: ../model_configs/llama2-7b.yaml
+
+runtime:
+  parallel:
+    pp_deg: 1
+    global_tp_deg: 1
+    global_tp_consec: 1
+    global_cp_deg: 1
+    global_ep_deg: 1
+    global_tp_of_ep_deg: 1
+    global_checkpoint: 0
+    cp_mode: zigzag
+    sdp: 0
+    default_dp_type: ddp
+    pipeline_type: gpipe
+    vocab_sdp: 0
+    vocab_tp: 1
+    vocab_cp: 1
+    vocab_sp: 1
+    mixed_precision: bf16
+  model:
+    model_type: gpt
+    model_size: llama2-7b
+    model_config_path: ${paths.model_config_path}
+    set_model_config_manually: 0
+    set_layernum_manually: 1
+    set_seqlen_manually: 0
+    num_layers: 4
+  profile:
+    profile: 1
+    profile_mode: static
+    profile_unit: all
+    profile_forward: 0
+    save_profiled_memory: 0
+    exit_after_profiling: 1
+  train:
+    global_batch_size: 8
+    seq_length: 1024
+    sequence_parallel: true
+    use_flash_attn: true
+
+profiler:
+  profile_type: memory
+  profile_mode: static
+  profile_batch_size: 8
+  profile_seq_length_list: "1024"
+  layernum_min: 1
+  layernum_max: 2
+  max_tp_deg: 8
+  profile_dp_type: zero3
+  mixed_precision: bf16
+  sequence_parallel: true
+  profile_unit: all
+  profile_flow_control: all

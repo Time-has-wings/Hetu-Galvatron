@@ -1,8 +1,10 @@
 import time
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 
+from .args_schema import RuntimeProfilerArgs
 from .base_profiler import BaseProfiler
 from .utils import print_peak_memory, save_profiled_memory, save_profiled_time
 
@@ -16,7 +18,7 @@ class RuntimeProfiler(BaseProfiler):
         Args:
             args: Arguments containing profiling configuration
         """
-        super().__init__(args)
+        super().__init__(RuntimeProfilerArgs.from_source(args))
 
     def set_profiler_dist(
         self,
@@ -283,7 +285,8 @@ class RuntimeProfiler(BaseProfiler):
 
     def _process_time_results(self) -> None:
         """Process and save time profiling results"""
-        avg_time = sum(self.time_list) / len(self.time_list)
+        valid_samples = self._filtered_time_samples()
+        avg_time = sum(valid_samples) / len(valid_samples)
         print(f"Average iteration time is: {avg_time:.4f} s")
 
         args = self.args
@@ -301,6 +304,27 @@ class RuntimeProfiler(BaseProfiler):
             self.start_iter, self.end_iter = self.end_iter, (self.end_iter - self.start_iter + self.end_iter)
             torch.cuda.synchronize()
             self.start.record()
+
+    def _filtered_time_samples(self) -> List[float]:
+        """Apply iter0 warmup removal and 3-sigma filtering."""
+        if len(self.time_list) == 0:
+            raise RuntimeError("No timing samples are available for processing.")
+
+        samples = list(self.time_list)
+        if self.start_iter == 0 and len(samples) > 1:
+            samples = samples[1:]
+
+        if len(samples) <= 2:
+            return samples
+
+        mean = float(np.mean(samples))
+        std = float(np.std(samples))
+        if std == 0:
+            return samples
+
+        lower, upper = mean - 3 * std, mean + 3 * std
+        filtered = [x for x in samples if lower <= x <= upper]
+        return filtered if len(filtered) > 0 else samples
 
     def _log_iteration_stats(
         self,

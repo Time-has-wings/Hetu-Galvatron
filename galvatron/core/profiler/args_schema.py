@@ -1,11 +1,29 @@
 """Pydantic models for Galvatron profiler arguments. Merged view: galvatron.core.args_schema."""
-from typing import Literal, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, Iterable, Literal, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def _source_to_dict(source: Any) -> Dict[str, Any]:
+    if source is None:
+        return {}
+    if isinstance(source, Mapping):
+        return dict(source)
+    if hasattr(source, "_get_kwargs"):
+        kwargs = source._get_kwargs()
+        if isinstance(kwargs, Mapping):
+            return dict(kwargs)
+        if isinstance(kwargs, Iterable):
+            return {k: v for k, v in kwargs}
+    if hasattr(source, "__dict__"):
+        return dict(vars(source))
+    raise TypeError(f"Unsupported args source type: {type(source)}")
 
 
 class ProfilerArgs(BaseModel):
     """Galvatron profiling (memory/computation) args."""
+    model_config = ConfigDict(extra="allow")
 
     profile_type: Literal["memory", "computation"] = Field(default="memory", description="Galvatron profiling type.")
     set_model_config_manually: int = Field(
@@ -67,9 +85,19 @@ class ProfilerArgs(BaseModel):
         description="Control profiling flow: all steps, data processing only, or script generation only.",
     )
 
+    @classmethod
+    def from_source(cls, source: Any) -> "ProfilerArgs":
+        if isinstance(source, cls):
+            return source
+        return cls.model_validate(_source_to_dict(source))
+
+    def _get_kwargs(self):
+        return list(self.model_dump().items())
+
 
 class ProfilerHardwareArgs(BaseModel):
-    """Galvatron profiling hardware (nccl-tests) args."""
+    """Galvatron profiling hardware args."""
+    model_config = ConfigDict(extra="allow")
 
     num_nodes: int = Field(default=1, description="Number of nodes.")
     num_gpus_per_node: int = Field(default=8, description="Number of GPUs per node.")
@@ -81,19 +109,85 @@ class ProfilerHardwareArgs(BaseModel):
         default_factory=list,
         description="Additional environment variables in format KEY=VALUE.",
     )
-    backend: Literal["nccl", "torch"] = Field(default="nccl", description="Backend of nccl-tests.")
-    nccl_test_dir: str = Field(default="nccl-tests", description="Directory of nccl-tests.")
-    mpi_path: str = Field(default="/usr/local/mpi/", description="MPI path.")
-    start_mb: int = Field(default=16, description="Starting communication size in MB.")
-    end_mb: int = Field(default=512, description="Ending communication size in MB.")
-    scale: int = Field(default=2, description="Memory scale of nccl-tests.")
-    hostfile: str = Field(default="hostfile", description="Hostfile for nccl-tests.")
-    avg_or_min_or_first: Literal["first", "min", "avg"] = Field(
-        default="first",
-        description="For a given group size: 'first' only profile first group; 'min' profile group with minimum bandwidth; 'avg' profile all and take average.",
-    )
     max_pp_deg: int = Field(default=8, description="Maximum pipeline parallel degree to search.")
     overlap_time_multiply: int = Field(
         default=4,
         description="The multiple of communication time and computation time when overlapped.",
     )
+
+    @classmethod
+    def from_source(cls, source: Any) -> "ProfilerHardwareArgs":
+        if isinstance(source, cls):
+            return source
+        return cls.model_validate(_source_to_dict(source))
+
+    def _get_kwargs(self):
+        return list(self.model_dump().items())
+
+
+class RuntimeProfilerArgs(BaseModel):
+    """Runtime profiler args wrapper (keeps original nested profile/train/parallel logic)."""
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    profile: Any
+    train: Any
+    parallel: Any
+    local_rank: int = 0
+
+    @classmethod
+    def from_source(cls, source: Any) -> "RuntimeProfilerArgs":
+        if isinstance(source, cls):
+            return source
+
+        if hasattr(source, "profile") and hasattr(source, "train") and hasattr(source, "parallel"):
+            data = {
+                "profile": source.profile,
+                "train": source.train,
+                "parallel": source.parallel,
+                "local_rank": getattr(source, "local_rank", 0),
+            }
+            return cls.model_validate(data)
+
+        raw = _source_to_dict(source)
+        profile = raw.get(
+            "profile",
+            SimpleNamespace(
+                profile=bool(raw.get("profile", False)),
+                exit_after_profiling=bool(raw.get("exit_after_profiling", True)),
+                save_profiled_memory=bool(raw.get("save_profiled_memory", False)),
+                profile_forward=bool(raw.get("profile_forward", False)),
+                profile_unit=raw.get("profile_unit", "all"),
+            ),
+        )
+        train = raw.get(
+            "train",
+            SimpleNamespace(
+                global_batch_size=raw.get("global_train_batch_size", raw.get("global_batch_size", 1)),
+                sequence_parallel=bool(raw.get("sequence_parallel", False)),
+                lr=raw.get("lr", 1e-4),
+            ),
+        )
+        parallel = raw.get(
+            "parallel",
+            SimpleNamespace(
+                pp_deg=raw.get("pp_deg", 1),
+                global_tp_deg=raw.get("global_tp_deg", 1),
+                global_checkpoint=raw.get("global_checkpoint", 0),
+                vocab_tp=raw.get("vocab_tp", 1),
+                pipeline_type=raw.get("pipeline_type", "gpipe"),
+                mixed_precision=raw.get("mixed_precision", "bf16"),
+            ),
+        )
+
+        data = {
+            "profile": profile,
+            "train": train,
+            "parallel": parallel,
+            "local_rank": raw.get("local_rank", 0),
+        }
+        return cls.model_validate(data)
+
+
+# Backward-compatible aliases.
+ModelProfilerArgs = ProfilerArgs
+HardwareProfilerArgs = ProfilerHardwareArgs
