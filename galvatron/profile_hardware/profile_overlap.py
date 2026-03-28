@@ -153,7 +153,7 @@ def profile(args):
         print('Profiling communication time when not overlapped with computation...')
     profile_op(comm_stream, lambda x: comm_func(x, 10), lambda x: comm_func(x, 30))
 
-    overlap_time_multiply = 4
+    overlap_time_multiply = args.overlap_time_multiply
     
     # computation overlaps communication
     if rank == 0:

@@ -302,7 +302,7 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pp_deg", type=int, default=2, help="Pipeline parallel degree.")
+    parser.add_argument("--pp_deg", type=int, default=2, help="Pipeline parallel degree.", required=True)
     parser.add_argument("--local_batch_size", type=int, default=32, help="local training batch size")
     parser.add_argument("--num_layers", type=int, default=48, help="Number of layers")
     parser.add_argument("--seq_length", type=int, default=512, help="Sequence length")

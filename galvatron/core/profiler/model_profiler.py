@@ -8,6 +8,7 @@ import numpy as np
 
 from galvatron.utils.config_utils import array2str, num2str, read_json_config, str2array, write_json_config
 
+from .args_schema import ProfilerArgs
 from .base_profiler import BaseProfiler
 
 
@@ -26,7 +27,7 @@ class ModelProfiler(BaseProfiler):
                 - profile_min/max_seq_length: Range for sequence length profiling
                 - profile_batch/seq_length_step: Step size for profiling
         """
-        super().__init__(args)
+        super().__init__(ProfilerArgs.from_source(args))
 
     def set_profiler_launcher(
         self,
@@ -1072,7 +1073,7 @@ class ModelProfiler(BaseProfiler):
                 - NCCL settings
         """
         return {
-            "PROFILE_LAUNCHER": os.getenv("PROFILE_LAUNCHER", "python3 -m torch.distributed.launch"),
+            "PROFILE_LAUNCHER": os.getenv("PROFILE_LAUNCHER", "torchrun"),
             "PROFILE_TRAINER": os.getenv("PROFILE_TRAINER", "train_dist.py"),
             "NUM_NODES": os.getenv("NUM_NODES", "1") if self.args.profile_type == "memory" else "1",
             "NUM_GPUS_PER_NODE": os.getenv("NUM_GPUS_PER_NODE", "8") if self.args.profile_type == "memory" else "1",

@@ -107,7 +107,7 @@ def train(args):
         key = f'all2all_size_{args.global_tp_deg}_{args.local_batch_size}MB_time'
         config[key] = per_comm_time
         write_json_config(config, env_config_path)
-        print('Already written all2all bandwidth into env config file %s!'%(env_config_path))
+        print('Already written all2all time into env config file %s!'%(env_config_path))
 
 
 if __name__ == '__main__':
