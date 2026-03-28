@@ -28,6 +28,11 @@ from galvatron.core.runtime.transformer.fused_kernels import fused_vocab_paralle
 from galvatron.core.runtime.transformer.rotary_pos_embedding import RotaryEmbedding
 from galvatron.core.runtime.tensor_parallel.layers import linear_with_grad_accumulation_and_async_allreduce
 from galvatron.core.runtime.transformer.norm import GalvatronNorm
+from galvatron.core.runtime.moe.router import TopKRouter
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
+from galvatron.core.runtime.moe.token_dispatcher import MoEAllGatherTokenDispatcher, MoEAlltoAllTokenDispatcher, MoEFlexTokenDispatcher
+from galvatron.core.runtime.moe.mlp import GroupedMLP, SequentialMLP
+
 
 
 # =========================================================================
@@ -40,7 +45,7 @@ class GalvatronEmbedding(nn.Module):
     Supports vocab-parallel embedding and sequence-parallel scatter.
     """
 
-    def __init__(self, args, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args:GalvatronRuntimeArgs, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.sequence_parallel = args.train.sequence_parallel
@@ -102,7 +107,7 @@ class GalvatronAttention(nn.Module):
     Can be used standalone in an arch list (type ``"attention"``).
     """
 
-    def __init__(self, args, layer_number, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.sequence_parallel = args.train.sequence_parallel
@@ -136,7 +141,7 @@ class GalvatronAttention(nn.Module):
                 q_layernorm=q_ln,
                 k_layernorm=k_ln,
             ),
-            layer_number,
+            layer_idx,
             attn_mask_type=AttnMaskType.causal,
             tp_group=self.tp_group,
             sp_group=self.sp_group,
@@ -199,7 +204,7 @@ class GalvatronMLP(nn.Module):
     Can be used standalone in an arch list (type ``"mlp"``).
     """
 
-    def __init__(self, args, layer_number, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.tp_group = tp_group.group if tp_group is not None else None
@@ -233,10 +238,10 @@ class GalvatronDecoderLayer(nn.Module):
     Used as a single unit in the arch list (type ``"decoder"``).
     """
 
-    def __init__(self, args, layer_number, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
-        self.attn = GalvatronAttention(args, layer_number, tp_group, sp_group, cp_group)
-        self.ffn = GalvatronMLP(args, layer_number, tp_group, sp_group, cp_group)
+        self.attn = GalvatronAttention(args, layer_idx, tp_group, sp_group, cp_group)
+        self.ffn = GalvatronMLP(args, layer_idx, tp_group, sp_group, cp_group)
 
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
         hidden_states = self.attn(hidden_states, position_ids, attention_mask, rotary_embedding)
@@ -251,7 +256,7 @@ class GalvatronDecoderLayer(nn.Module):
 class GalvatronFinalNorm(nn.Module):
     """Final normalization layer before the LM head."""
 
-    def __init__(self, args):
+    def __init__(self, args:GalvatronRuntimeArgs):
         super().__init__()
         m = args.model
         self.norm = GalvatronNorm(m, m.hidden_size, eps=m.norm_epsilon)
@@ -291,7 +296,7 @@ class _LMHeadLinear(nn.Module):
 class GalvatronCausalLMHead(nn.Module):
     """TP-aware causal language model head with vocab-parallel cross-entropy."""
 
-    def __init__(self, args, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args:GalvatronRuntimeArgs, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.sequence_parallel = args.train.sequence_parallel
@@ -345,3 +350,141 @@ class GalvatronCausalLMHead(nn.Module):
 
         loss = loss.transpose(0, 1).contiguous()
         return loss
+
+
+# =========================================================================
+# MoE Attention
+# =========================================================================
+
+class GalvatronMoEAttention(nn.Module):
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
+        super().__init__()
+        self.attn = GalvatronAttention(args, layer_idx, tp_group, sp_group, cp_group)
+        self.router = GalvatronMoERouter(args, layer_idx)
+        self.pre_router_norm = GalvatronNorm(args.model, args.model.hidden_size, args.model.norm_epsilon)
+
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
+        hidden_states = self.attn(hidden_states, position_ids, attention_mask, rotary_embedding)
+        mlp_residual = hidden_states
+        hidden_states = self.pre_router_norm(hidden_states)
+        return hidden_states, mlp_residual
+
+# =========================================================================
+# MoE Router
+# =========================================================================
+
+class GalvatronMoERouter(nn.Module):
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx):
+        super().__init__()
+        self.layer_idx = layer_idx
+        self.router = TopKRouter(config=args.model)
+        self.router.layer_idx = layer_idx
+
+    def forward(self, hidden_states):
+        probs, routing_map = self.router(hidden_states)
+        return probs, routing_map
+
+
+# =========================================================================
+# MoE MLP
+# =========================================================================
+
+# TODO: Add shared expert support
+class GalvatronMoEMLP(nn.Module):
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx, ep_group=None, tp_of_ep_group=None, tp_and_ep_group=None):
+        super().__init__()
+        self.layer_idx = layer_idx
+
+        m = args.model
+        
+        self.ep_group = ep_group.group if ep_group is not None else None
+        self.tp_of_ep_group = tp_of_ep_group.group if tp_of_ep_group is not None else None
+        self.tp_and_ep_group = tp_and_ep_group.group if tp_and_ep_group is not None else None
+
+        self.expert_parallel_size = torch.distributed.get_world_size(self.ep_group)
+        assert self.expert_parallel_size > 0, "Expected non-negative expert parallel size"
+
+        self.expert_parallel_rank = torch.distributed.get_rank(self.ep_group)
+        assert self.expert_parallel_rank >= 0, "Expected non-negative expert parallel rank"
+
+        assert m.num_moe_experts % self.expert_parallel_size == 0
+        self.num_local_experts = m.num_moe_experts // self.expert_parallel_size
+
+        local_expert_indices_offset = self.expert_parallel_rank * self.num_local_experts
+        
+        self.local_expert_indices = [local_expert_indices_offset + i for i in range(self.num_local_experts)]
+        assert all(map(lambda x: x < m.num_moe_experts, self.local_expert_indices))
+
+        token_dispatcher_kwargs = {
+            'num_local_experts': self.num_local_experts,
+            'local_expert_indices': self.local_expert_indices,
+            'config': m,
+            'ep_group': self.ep_group,
+            'tp_of_ep_group': self.tp_of_ep_group,
+            'tp_and_ep_group': self.tp_and_ep_group,
+            'layer_idx': self.layer_idx
+        }
+
+        if m.moe_token_dispatcher_type == "allgather":
+            self.token_dispatcher = MoEAllGatherTokenDispatcher(**token_dispatcher_kwargs)
+        elif m.moe_token_dispatcher_type == "alltoall":
+            self.token_dispatcher = MoEAlltoAllTokenDispatcher(**token_dispatcher_kwargs)
+        elif m.moe_token_dispatcher_type == "alltoall_seq":
+            assert False, "alltoall_seq is deprecated"
+        elif m.moe_token_dispatcher_type == "flex":
+            self.token_dispatcher = MoEFlexTokenDispatcher(**token_dispatcher_kwargs)     
+           
+        if m.moe_grouped_gemm:
+            self.experts = GroupedMLP(
+                num_local_experts=self.num_local_experts, 
+                config=m, 
+                tp_of_ep_group=self.tp_of_ep_group,
+                layer_idx=self.layer_idx
+            )
+        else:
+            # TODO: TE Tensor Parallel Adaptation
+            self.experts = SequentialMLP(
+                num_local_experts=self.num_local_experts,
+                config=m,
+                submodules=MLPSubmodules(
+                    linear_fc1=ColumnParallelLinear,
+                    linear_fc2=RowParallelLinear,
+                ),
+                tp_of_ep_group=self.tp_of_ep_group,
+                tp_and_ep_group=self.tp_and_ep_group,
+                layer_idx=self.layer_idx
+            )
+            
+    def forward(self, hidden_states, mlp_residual, probs, routing_map):
+        (dispatched_input, tokens_per_expert) = self.token_dispatcher.token_permutation(
+                hidden_states, probs, routing_map
+            )
+        expert_output, mlp_bias = self.experts(dispatched_input, tokens_per_expert)
+        hidden_states, mlp_bias = self.token_dispatcher.token_unpermutation(expert_output, mlp_bias)
+        hidden_states = hidden_states + mlp_residual
+        return hidden_states
+
+
+# =========================================================================
+# MoE Decoder layer (attention + router + mlp combined)
+# =========================================================================
+
+class GalvatronMoEDecoderLayer(nn.Module):
+    """Pre-norm decoder block = ``GalvatronAttention`` + ``GalvatronMLP``.
+
+    Used as a single unit in the arch list (type ``"moe_decoder"``).
+    """
+
+    def __init__(self, args:GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None, ep_group=None, tp_of_ep_group=None, tp_and_ep_group=None):
+        super().__init__()
+        self.attn = GalvatronMoEAttention(args, layer_idx, tp_group, sp_group, cp_group)
+        self.router = GalvatronMoERouter(args, layer_idx)
+        self.ffn = GalvatronMoEMLP(args, layer_idx, ep_group, tp_of_ep_group, tp_and_ep_group)
+
+    # TODO: check correctness
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
+        hidden_states, mlp_residual = self.attn(hidden_states, position_ids, attention_mask, rotary_embedding)
+        probs, routing_map = self.router(hidden_states)
+        hidden_states = self.ffn(hidden_states, mlp_residual, probs, routing_map)
+
+        return hidden_states

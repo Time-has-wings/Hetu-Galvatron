@@ -25,6 +25,7 @@ import os
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Callable
 from pydantic import ImportString
 import torch
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
@@ -140,7 +141,7 @@ def _load_yaml_model_config(yaml_path: str) -> dict:
     return data or {}
 
 
-def _apply_yaml_to_model_args(args, yaml_data: dict):
+def _apply_yaml_to_model_args(args:GalvatronRuntimeArgs, yaml_data: dict):
     """Apply non-null YAML values onto ``args.model.*``.
 
     Only overwrites fields that are still at their default (None) in args.model,
@@ -254,7 +255,7 @@ def _fill_model_args_from_hf(args, hf_config):
 # Unified entry point
 # =========================================================================
 
-def resolve_model_config(args) -> Optional["PretrainedConfig"]:
+def resolve_model_config(args:GalvatronRuntimeArgs) -> Optional["PretrainedConfig"]:
     """One-call entry point: resolve model config from all sources.
 
     Priority (highest wins):

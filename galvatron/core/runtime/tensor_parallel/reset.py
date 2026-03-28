@@ -3,7 +3,6 @@ from galvatron.core.runtime.tensor_parallel.layers import ColumnParallelLinear, 
 from galvatron.core.runtime.tensor_parallel.random import get_cuda_rng_tracker, get_data_parallel_rng_tracker_name, get_expert_parallel_rng_tracker_name, get_tensor_parallel_rng_tracker_name
 from galvatron.core.runtime.parallel_state import get_args
 from galvatron.core.runtime.moe.router import TopKRouter
-from galvatron.core.runtime.models.modules import _LMHeadLinear
 # from torch.nn.init import xavier_uniform_ as init_method
 from .utils import init_method_normal
 
@@ -30,6 +29,8 @@ def router_reset_parameters(self):
         init_method(self.weight)
 
 def init_reset_parameter():
+    from galvatron.core.runtime.models.modules import _LMHeadLinear
+
     ColumnParallelLinear.reset_parameters = colummn_row_reset_parameters
     RowParallelLinear.reset_parameters = colummn_row_reset_parameters
     VocabParallelEmbedding.reset_parameters = colummn_row_reset_parameters

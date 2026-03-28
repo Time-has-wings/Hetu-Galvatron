@@ -8,7 +8,6 @@ hidden_size: 4096
 num_layers: 32
 num_attention_heads: 32
 num_query_groups: 8            # GQA: 8 KV heads
-ffn_hidden_size: 14336
 vocab_size: 32000
 
 normalization: RMSNorm
@@ -24,3 +23,7 @@ add_bias_linear: false
 add_qkv_bias: false
 untie_embeddings_and_output_weights: false
 make_vocab_size_divisible_by: 128
+
+num_moe_experts: 8
+moe_ffn_hidden_size: 14336
+moe_router_topk: 2

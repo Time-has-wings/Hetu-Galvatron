@@ -33,7 +33,7 @@ class Router(ABC, torch.nn.Module):
         self.config = config
         self.num_experts = self.config.num_moe_experts
         self.moe_aux_loss_func = None
-        self.layer_number = None
+        self.layer_idx = None
 
         # Initialize the gate weights.
         # TODO: Add support for GPU initialization, which requires updating the golden values.
@@ -90,9 +90,9 @@ class Router(ABC, torch.nn.Module):
         """
         raise NotImplementedError("Forward function not implemented.")
 
-    def set_layer_number(self, layer_number: int):
+    def set_layer_idx(self, layer_idx: int):
         """Set the layer number for the router."""
-        self.layer_number = layer_number
+        self.layer_idx = layer_idx
 
 
 class TopKRouter(Router):
@@ -283,11 +283,12 @@ class TopKRouter(Router):
         if moe_aux_loss_coeff == 0:
             return activation
         sequence_partition_group = None
+        # TODO: Check correctness
         if self.config.moe_token_dispatcher_type == "alltoall_seq":
-            sequence_partition_group = parallel_state.get_context_parallel_group()
-            moe_aux_loss_coeff /= parallel_state.get_tensor_model_parallel_world_size()
-        elif parallel_state.get_tensor_and_context_parallel_world_size() > 1:
-            sequence_partition_group = parallel_state.get_tensor_and_context_parallel_group()
+            sequence_partition_group = parallel_state.get_vocab_cp_comm_group().group
+            moe_aux_loss_coeff /= parallel_state.get_vocab_tp_sp_cp_world_size()
+        elif parallel_state.get_vocab_tp_sp_cp_world_size() > 1:
+            sequence_partition_group = parallel_state.get_vocab_tp_sp_cp_comm_group().group
 
         aux_loss = load_balancing_loss_func(
             moe_aux_loss_coeff=moe_aux_loss_coeff, sequence_partition_group=sequence_partition_group
@@ -295,7 +296,7 @@ class TopKRouter(Router):
         save_to_aux_losses_tracker(
             "load_balancing_loss",
             aux_loss / moe_aux_loss_coeff,
-            self.layer_number,
+            self.layer_idx,
             self.config.num_layers,
             reduce_group=sequence_partition_group,
         )
@@ -342,7 +343,7 @@ class TopKRouter(Router):
             else:
                 logits = MoEAuxLossAutoScaler.apply(logits, z_loss)
             save_to_aux_losses_tracker(
-                "z_loss", z_loss / moe_z_loss_coeff, self.layer_number, self.config.num_layers
+                "z_loss", z_loss / moe_z_loss_coeff, self.layer_idx, self.config.num_layers
             )
         return logits
 

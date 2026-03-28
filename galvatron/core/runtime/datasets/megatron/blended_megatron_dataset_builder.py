@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterable, List, Optional, Type, Union
 import numpy
 import torch
 
-from galvatron.core.runtime.parallel_state import get_args, get_vocab_tensor_parallel_rank, get_virtual_pipeline_model_parallel_rank
+from galvatron.core.runtime.parallel_state import get_args, get_vocab_tp_sp_rank, get_virtual_pipeline_model_parallel_rank
 from galvatron.core.runtime.datasets.megatron.blended_dataset import BlendedDataset
 from galvatron.core.runtime.datasets.megatron.blended_megatron_dataset_config import BlendedMegatronDatasetConfig
 from galvatron.core.runtime.datasets.megatron.megatron_dataset import LowLevelDataset, MegatronDataset
@@ -33,7 +33,7 @@ def need_to_build_dataset():
     if share_save:
         return rank == 0
     else:
-        return get_vocab_tensor_parallel_rank() == 0
+        return get_vocab_tp_sp_rank() == 0
 
 
 class BlendedMegatronDatasetBuilder(object):

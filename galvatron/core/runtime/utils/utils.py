@@ -9,9 +9,10 @@ import logging
 from typing import Any, Dict
 
 import torch.distributed
-from galvatron.core.runtime import parallel_state as mpu
+from galvatron.core.runtime import parallel_state
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
 
 try:
     _torch_version = PkgVersion(torch.__version__)
@@ -150,23 +151,20 @@ def print_rank_0(message):
         print(message, flush=True)
 
 
-def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_group, vtp_seq_group=None):
+def set_megatron_args_for_dataset(args:GalvatronRuntimeArgs):
     torch.distributed.barrier()
 
-    world_size = torch.distributed.get_world_size() 
-    assert world_size // args.parallel.pp_deg // args.parallel.vocab_tp // args.parallel.vocab_cp == len(vtp_data_group.ranks)
+    vocab_dp_comm_group = parallel_state.get_vocab_dp_comm_group()
+    world_size = args.world_size
+    assert world_size // args.parallel.pp_deg // args.parallel.vocab_tp // args.parallel.vocab_cp == len(vocab_dp_comm_group.ranks)
+    
     if args.ckpt.load_iteration != 0:
         assert args.ckpt.distributed_checkpoint == True, "Checkpoint iteration > 0 requires distributed checkpoint"
         args.train.iteration = args.ckpt.load_iteration
     else:
         args.train.iteration = 0
 
-    args.train.micro_batch_size = args.train.global_batch_size // len(vtp_data_group.ranks)
-    mpu.set_pipeline_parallel_group(hp_model.model.group)
-    mpu.set_vocab_tensor_parallel_group(vtp_tensor_group.group)
-    mpu.set_vocab_context_parallel_group(vtp_seq_group.group)
-    mpu.set_vocab_data_parallel_group(vtp_data_group.group)
-    mpu.set_tensor_model_parallel_src_rank(vtp_tensor_group.ranks[0])
+    args.train.micro_batch_size = args.train.global_batch_size // len(vocab_dp_comm_group.ranks)
 
 
 def get_layernorm_offset(model, layernorm_name=[]):
@@ -200,9 +198,9 @@ def get_batch_on_this_tp_rank(data_iterator):
 
     def _broadcast(item):
        if item is not None:
-           torch.distributed.broadcast(item, mpu.get_tensor_model_parallel_src_rank(), group=mpu.get_vocab_tensor_parallel_group())
+           torch.distributed.broadcast(item, parallel_state.get_vocab_tp_sp_src_rank(), group=parallel_state.get_vocab_tp_sp_comm_group().group)
 
-    if mpu.get_vocab_tensor_parallel_rank() == 0:
+    if parallel_state.get_vocab_tp_sp_rank() == 0:
 
        if data_iterator is not None:
            data = next(data_iterator)
@@ -224,12 +222,12 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(batch['attention_mask'])
            _broadcast(batch['position_ids'])
 
-       elif mpu.is_pipeline_first_stage():
+       elif parallel_state.is_pipeline_first_stage():
            _broadcast(batch['tokens'])
            _broadcast(batch['attention_mask'])
            _broadcast(batch['position_ids'])
 
-       elif mpu.is_pipeline_last_stage():
+       elif parallel_state.is_pipeline_last_stage():
            # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
            # Currently the Multi-Token Prediction (MTP) layers is fixed on the last stage, so we need
            # to broadcast tokens and position_ids to all of the tensor parallel ranks on the last stage.
@@ -260,7 +258,7 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(attention_mask)
            _broadcast(position_ids)
 
-       elif mpu.is_pipeline_first_stage():
+       elif parallel_state.is_pipeline_first_stage():
            labels=None
            loss_mask=None
 
@@ -268,7 +266,7 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(attention_mask)
            _broadcast(position_ids)
 
-       elif mpu.is_pipeline_last_stage():
+       elif parallel_state.is_pipeline_last_stage():
            # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
            # Currently the Multi-Token Prediction (MTP) layers is fixed on the last stage, so we need
            # to broadcast tokens and position_ids to all of the tensor parallel ranks on the last stage.
@@ -305,9 +303,9 @@ def get_batch_on_this_cp_rank(batch: Dict[str, Any]):
     # we split sequence into 2*CP ranks. Assuming CP=2, we then get 4 chunks, chunk_0
     # and chunk_3 are assigned to GPU0, chunk_1 and chunk_2 are assigned to GPU1, so
     # that we can get balanced workload among GPUs in a context parallel group.
-    cp_size = mpu.get_vocab_context_parallel_world_size()
+    cp_size = parallel_state.get_vocab_cp_world_size()
     if cp_size > 1:
-        cp_rank = mpu.get_vocab_context_parallel_rank()
+        cp_rank = parallel_state.get_vocab_cp_rank()
         for key, val in batch.items():
             if val is not None:
                 seq_dim = 1 if key != 'attention_mask' else 2
@@ -329,11 +327,10 @@ def get_batch_on_this_cp_rank(batch: Dict[str, Any]):
 
 def average_losses_across_data_parallel_group(losses):
     """Reduce a tensor of losses across all GPUs."""
-    averaged_losses = torch.cat(
-        [loss.clone().detach().view(1) for loss in losses])
-    torch.distributed.all_reduce(averaged_losses,
-                                 group=mpu.get_vocab_data_parallel_group())
-    averaged_losses = averaged_losses / \
-        torch.distributed.get_world_size(group=mpu.get_vocab_data_parallel_group())
+    vocab_dp_comm_group = parallel_state.get_vocab_dp_comm_group()
+
+    averaged_losses = torch.cat([loss.clone().detach().view(1) for loss in losses])
+    torch.distributed.all_reduce(averaged_losses, group=vocab_dp_comm_group.group)
+    averaged_losses = averaged_losses / parallel_state.get_parallel_world_size(vocab_dp_comm_group.group)
 
     return averaged_losses
