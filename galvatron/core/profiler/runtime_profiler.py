@@ -4,21 +4,22 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
-from .args_schema import RuntimeProfilerArgs
 from .base_profiler import BaseProfiler
 from .utils import print_peak_memory, save_profiled_memory, save_profiled_time
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
 
 
 class RuntimeProfiler(BaseProfiler):
     """Runtime profiler for monitoring memory usage and computation time during model execution."""
 
-    def __init__(self, args: Any):
+    def __init__(self, args: GalvatronRuntimeArgs):
         """Initialize runtime profiler
 
         Args:
             args: Arguments containing profiling configuration
         """
-        super().__init__(RuntimeProfilerArgs.from_source(args))
+        super().__init__()
+        self.args = args
 
     def set_profiler_dist(
         self,
@@ -44,18 +45,21 @@ class RuntimeProfiler(BaseProfiler):
             end_iter: Ending iteration for profiling
             rank: Current process rank (default: get from torch.distributed)
         """
+        args = self.args
         rank = torch.distributed.get_rank() if rank is None else rank
         if profile_ranks is None:
             world_size = torch.distributed.get_world_size()
             profile_ranks = [0, world_size - 1]
 
-        self.set_path(path)
+        self.set_work_dir(path)
         self.set_model_name(model_name)
-        self.set_model_layer_configs(model_layer_configs)
-        self.set_memory_profiler(rank, profile_ranks)
+        self.set_profile_unit(args.profile.profile_unit)
+        self.set_mixed_precision(args.parallel.mixed_precision)
 
-        exit_ = bool(self.args.profile.exit_after_profiling)
-        self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
+        self.set_model_layer_configs(model_layer_configs)
+
+        self.set_memory_profiler(rank, profile_ranks)
+        self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=bool(args.profile.exit_after_profiling))
 
     def set_profiler_single(self, start_iter=10, end_iter=20):
         """

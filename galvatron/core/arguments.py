@@ -130,21 +130,24 @@ def load_with_hydra(
 ) -> CoreArgs:
     from hydra import compose, initialize_config_dir
 
-    normalized_overrides = list(overrides or [])
-    if mode == "train_dist" and normalized_overrides and normalized_overrides[0].startswith("--"):
-        normalized_overrides = _legacy_cli_to_hydra_overrides(normalized_overrides)
+    # normalized_overrides = list(overrides or [])
+    # if mode == "train_dist" and normalized_overrides and normalized_overrides[0].startswith("--"):
+    #     normalized_overrides = _legacy_cli_to_hydra_overrides(normalized_overrides)
 
     path = Path(config_path).resolve()
     with initialize_config_dir(config_dir=str(path.parent), version_base=None):
-        cfg = compose(config_name=path.name, overrides=normalized_overrides, **hydra_kwargs)
+        cfg = compose(config_name=path.name, overrides=overrides or [], **hydra_kwargs)
     config_dict = OmegaConf.to_container(cfg, resolve=True)
-    _normalize_runtime_model_dtype(config_dict)
-    _normalize_profiler_fields(config_dict)
+
+    # import rich
+    # rich.print(f'config_dict: {config_dict}')
+    # _normalize_runtime_model_dtype(config_dict)
+    # _normalize_profiler_fields(config_dict)
     args = CoreArgs(**config_dict)
     if mode == "train_dist":
         args = args.runtime
-    elif mode == "profile":
-        args = args.profiler
+    elif mode == "model_profiler":
+        args = args.model_profiler
     elif mode == "search":
         args = args.search_engine
     return args
