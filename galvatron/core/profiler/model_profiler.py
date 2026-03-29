@@ -883,12 +883,15 @@ class ModelProfiler(BaseProfiler):
             "num_query_groups",
             "add_bias_linear",
             "swiglu",
+            "activation_func",
             "extra_args_str",
             "seq_length",
             "encoder_seq_length",
             "decoder_seq_length",
             "is_moe_model",
             "profile_flow_control",
+            "parallel",
+            "profile",
         ]
         exclude_arg_names = profile_arg_names + self.layernum_arg_names
         MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)

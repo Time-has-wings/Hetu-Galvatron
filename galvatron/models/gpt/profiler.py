@@ -1,16 +1,10 @@
-"""Model profiling entrypoint for GPT."""
-
 import os
 import sys
 from typing import Dict, List
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-
 from galvatron.core.arguments import load_with_hydra
+from galvatron.core.profiler import ModelProfiler
 from galvatron.core.profiler.args_schema import ProfilerArgs
-from galvatron.core import ModelProfiler
 from galvatron.utils.hf_config_adapter import model_name, resolve_model_config
 
 
@@ -43,21 +37,19 @@ def _build_profile_args(config_path: str, overrides: List[str]) -> ProfilerArgs:
     merged["mixed_precision"] = runtime.parallel.mixed_precision
     merged["sequence_parallel"] = runtime.train.sequence_parallel
     merged["use_flash_attn"] = runtime.train.use_flash_attn
+    # Keep nested structure for BaseProfiler path conventions.
+    merged["parallel"] = runtime.parallel
+    merged["profile"] = runtime.profile
 
     merged["model_name"] = model_name(runtime)
     return ProfilerArgs.from_source(merged)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or not sys.argv[1].endswith((".yaml", ".yml")):
-        raise ValueError("Usage: python profile.py <config_path> [overrides...]")
-
-    config_file = sys.argv[1]
-    profile_args = _build_profile_args(config_file, sys.argv[2:])
+    profile_args = _build_profile_args(sys.argv[1], sys.argv[2:])
 
     profiler = ModelProfiler(profile_args)
     path = os.path.dirname(os.path.abspath(__file__))
     profiler.set_profiler_launcher(path, layernum_arg_names=["num_layers"], model_name=profile_args.model_name)
     profiler.launch_profiling_scripts()
     profiler.process_profiled_data()
-
