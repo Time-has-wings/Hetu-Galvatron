@@ -8,14 +8,14 @@ import numpy as np
 
 from galvatron.utils.config_utils import array2str, num2str, read_json_config, str2array, write_json_config
 
-from .args_schema import ProfilerArgs
 from .base_profiler import BaseProfiler
+from galvatron.core.profiler.args_schema import GalvatronModelProfilerArgs
 
 
 class ModelProfiler(BaseProfiler):
     """Model profiler for analyzing model performance characteristics including computation and memory usage"""
 
-    def __init__(self, args):
+    def __init__(self, args: GalvatronModelProfilerArgs):
         """Initialize model profiler
 
         Args:
@@ -27,16 +27,19 @@ class ModelProfiler(BaseProfiler):
                 - profile_min/max_seq_length: Range for sequence length profiling
                 - profile_batch/seq_length_step: Step size for profiling
         """
-        super().__init__(ProfilerArgs.from_source(args))
+        super().__init__()
+        self.args = args
 
-    def set_profiler_launcher(
-        self,
-        path: str,
-        layernum_arg_names: Optional[List[str]] = None,
-        model_name: Optional[str] = None,
-        seqlen_arg_names: Optional[List[str]] = None,
-        layernum_listed: bool = False,
-    ) -> None:
+        self.global_batch_size_list = None
+        self.layernum_tuple_list = None
+        self.seq_length_tuple_list = None
+        self.basic_overrides_dict = None
+        self.envs_dict = None
+
+        self.num_layertype = 1 # TODO: modify this trick
+
+
+    def set_profiler_launcher(self, path: str, model_name: Optional[str] = None,) -> None:
         """Set up profiler launcher configuration
 
         Args:
@@ -46,139 +49,160 @@ class ModelProfiler(BaseProfiler):
             seqlen_arg_names: Names of arguments specifying sequence lengths
             layernum_listed: Whether layer numbers are provided as a list
         """
-        self.set_path(path)
-        self.set_model_name(model_name)
-        self.set_layernum_list(layernum_arg_names, layernum_listed)
-        self.set_seqlen_list()
-        self.set_seqlen_arg_names(seqlen_arg_names)
-
-    def set_layernum_list(self, layernum_arg_names: Optional[List[str]], layernum_listed: bool) -> None:
-        """Set layer number argument names and process layer numbers
-
-        Args:
-            layernum_arg_names: Names of arguments specifying number of layers
-            layernum_listed: Whether layer numbers are provided as a list
-
-        Note:
-            For models like Swin Transformer, layer numbers might be provided as a list
-        """
-        self.layernum_listed = layernum_listed
-        self.layernum_arg_names = layernum_arg_names
-
-        if not self.layernum_listed:
-            # Regular case: each argument specifies one layer type
-            self.num_layertype = len(layernum_arg_names)
-            self.layernum_list = [getattr(self.args, name) for name in layernum_arg_names]
-        else:
-            # Special case: list-format layernum args like Swin `depths`
-            assert len(layernum_arg_names) == 1
-            self.num_layertype = sum([len(getattr(self.args, name)) for name in layernum_arg_names])
-            self.layernum_list = [layernum for name in layernum_arg_names for layernum in getattr(self.args, name)]
-
-    def set_seqlen_list(self) -> None:
-        """Set sequence length list based on profiling configuration
-
-        This method handles different profiling modes:
-        - static: Fixed sequence length
-        - batch: Batch size variation
-        - sequence: Sequence length variation
-
-        Note:
-            For memory profiling in sequence mode, sequence lengths must be powers of 2
-        """
         args = self.args
-        self.sequence_length_list = []
 
-        if self.args.profile_seq_length_list is not None:
-            self.profile_seq_length_list = str2array(self.args.profile_seq_length_list)
-            assert len(self.profile_seq_length_list) == self.num_layertype
-        else:
-            # for swin model
-            if self.layernum_listed:
-                self.profile_seq_length_list = []
-                for i in range(len(self.args.depths)):
-                    seq_len = (self.args.image_size // self.args.patch_size // (2 ** i)) ** 2
-                    self.profile_seq_length_list.append(seq_len)
+        self.set_work_dir(path)
+        self.set_model_name(model_name)
+        self.set_profile_unit(args.profile_unit)
+        self.set_mixed_precision(args.profile_mixed_precision)
 
-        for i in range(self.num_layertype):
-            if args.profile_mode == "static":
-                self.sequence_length_list.append([self.profile_seq_length_list[i]])
-            elif args.profile_mode == "batch":
-                self.sequence_length_list.append([self.profile_seq_length_list[i]])
-            elif args.profile_mode == "sequence":
-                if self.num_layertype > 1:
-                    assert False, "Sequence profiling only support single layertype!"
-                if args.profile_type == "computation":
-                    assert args.profile_min_seq_length is not None and args.profile_max_seq_length is not None
-                    self.sequence_length_list.append(
-                        list(
-                            range(
-                                args.profile_min_seq_length,
-                                args.profile_max_seq_length + 1,
-                                args.profile_seq_length_step,
-                            )
-                        )
-                    )
-                elif args.profile_type == "memory":
-                    assert args.profile_min_seq_length is not None and args.profile_max_seq_length is not None
-                    # For memory profiling, sequence lengths must be powers of 2
-                    assert (
-                        1 << (args.profile_min_seq_length.bit_length() - 1)
-                    ) == args.profile_min_seq_length, "profile_min_seq_length must be a power of 2"
-                    assert (
-                        1 << (args.profile_max_seq_length.bit_length() - 1)
-                    ) == args.profile_max_seq_length, "profile_max_seq_length must be a power of 2"
-                    self.sequence_length_list.append(
-                        [
-                            (1 << j)
-                            for j in range(
-                                args.profile_min_seq_length.bit_length() - 1, args.profile_max_seq_length.bit_length()
-                            )
-                        ]
-                    )
+    # =============== Necessary initialization Functions ===============
+    def get_global_batch_size_list(self) -> List[int]:
+        if self.global_batch_size_list == None:
+            args = self.args
+            
+            if args.profile_mode == 'static':
+                assert args.profile_fixed_batch_size is not None, f"profile_fixed_batch_size is not set for static mode"
+                self.global_batch_size_list = [args.profile_fixed_batch_size]
+            elif args.profile_mode == 'batch':
+                assert args.profile_min_batch_size is not None and args.profile_max_batch_size is not None and args.profile_batch_size_step is not None, f"profile_min_batch_size, profile_max_batch_size, and profile_batch_size_step are not set for batch mode"
+                self.global_batch_size_list = list(range(args.profile_min_batch_size, args.profile_max_batch_size + 1, args.profile_batch_size_step))
+            elif args.profile_mode == 'sequence':
+                assert args.profile_fixed_batch_size is not None, f"profile_fixed_batch_size is not set for sequence mode"
+                self.global_batch_size_list = [args.profile_fixed_batch_size]
+            
+        return self.global_batch_size_list
 
-    def set_seqlen_arg_names(self, seqlen_arg_names: Optional[List[str]]) -> None:
-        """Set sequence length argument names
+    def get_layernum_tuple_list(self) -> Union[List[Tuple[int]], List[Tuple[int, int]]]:
+        if self.layernum_tuple_list is None:
+            args = self.args
+            assert args.profile_layernum_min is not None and args.profile_layernum_max is not None, f"profile_layernum_min and profile_layernum_max are not set"
+            
+            if self.num_layertype == 1: # decoder-only or encoder-only
+                self.layernum_tuple_list = [
+                    (args.profile_layernum_min, ),
+                    (args.profile_layernum_max, )
+                ]
+            else: # encoder-decoder
+                self.layernum_tuple_list = [
+                    (args.profile_layernum_min, args.profile_layernum_min),
+                    (args.profile_layernum_max, args.profile_layernum_min),
+                    (args.profile_layernum_min, args.profile_layernum_max),
+                ]
 
-        Args:
-            seqlen_arg_names: Names of arguments specifying sequence lengths.
-                            If None, defaults to ['seq_length']
-        """
-        if seqlen_arg_names is None:
-            self.seqlen_arg_names = ["seq_length"]
-        else:
-            self.seqlen_arg_names = seqlen_arg_names
+        return self.layernum_tuple_list
+
+    def get_seq_length_tuple_list(self) -> Union[List[Tuple[int]], List[Tuple[int, int]]]:
+        if self.seq_length_tuple_list is None:
+            args = self.args
+
+            if self.num_layertype == 1: # decoder-only or encoder-only
+                if args.profile_mode == 'static' or args.profile_mode == 'batch':
+                    assert args.profile_fixed_seq_length_list is not None, f"profile_fixed_seq_length_list is not set for static or batch mode"
+                    assert len(args.profile_fixed_seq_length_list) == 1, f"profile_fixed_seq_length_list should have only one element for decoder-only or encoder-only model"
+                    self.seq_length_tuple_list = [
+                        (args.profile_fixed_seq_length_list[0],),
+                    ]
+                elif args.profile_mode == 'sequence':
+                    if args.profile_type == 'computation':
+                        assert args.profile_min_seq_length is not None and args.profile_max_seq_length is not None and args.profile_seq_length_step is not None, f"profile_min_seq_length, profile_max_seq_length, and profile_seq_length_step are not set for computation mode and sequence mode"
+                        seq_length_all_case = list(range(args.profile_min_seq_length, args.profile_max_seq_length + 1, args.profile_seq_length_step))
+                    elif args.profile_type == 'memory':
+                        assert args.profile_min_seq_length is not None and args.profile_max_seq_length is not None, f"profile_min_seq_length and profile_max_seq_length are not set for memory mode and sequence mode"
+                        # For memory profiling, sequence lengths must be powers of 2
+                        assert (1 << (args.profile_min_seq_length.bit_length() - 1)) == args.profile_min_seq_length, "profile_min_seq_length must be a power of 2"
+                        assert (1 << (args.profile_max_seq_length.bit_length() - 1)) == args.profile_max_seq_length, "profile_max_seq_length must be a power of 2"
+                        seq_length_all_case = [(1 << shift) for shift in range(args.profile_min_seq_length.bit_length() - 1, args.profile_max_seq_length.bit_length() - 1)]
+                    self.seq_length_tuple_list = [
+                        (seq_length, ) for seq_length in seq_length_all_case
+                    ]
+            else:
+                if args.profile_mode == 'static' or args.profile_mode == 'batch':
+                    assert args.profile_fixed_seq_length_list is not None, f"profile_fixed_seq_length_list is not set for static or batch mode"
+                    assert len(args.profile_fixed_seq_length_list) == 2, f"profile_fixed_seq_length_list should have two elements for encoder-decoder model"
+                    self.seq_length_tuple_list = [
+                        (args.profile_fixed_seq_length_list[0], args.profile_fixed_seq_length_list[1])
+                    ]
+                elif args.profile_mode == 'sequence':
+                    raise NotImplementedError("Sequence profiling is not supported for encoder-decoder model")
+
+        return self.seq_length_tuple_list
+
+    def get_basic_overrides_dict(self) -> Dict[str, Any]:
+        if self.basic_overrides_dict is None:
+            args = self.args
+            if args.profile_type == 'computation':
+                self.basic_overrides_dict = {
+                    'runtime.parallel.pp_deg': 1,
+                    'runtime.parallel.global_tp_deg': 1,
+                    'runtime.parallel.global_cp_deg': 1,
+                    'runtime.parallel.global_checkpoint': 0,
+                    'runtime.parallel.vocab_tp': 1,
+                    'runtime.parallel.vocab_cp': 1,
+                    'runtime.parallel.default_dp_type': 'ddp',
+                    'runtime.parallel.sdp':0,
+                    'runtime.parallel.pipeline_type': 'gpipe',
+                    'runtime.parallel.mixed_precision': args.profile_mixed_precision,
+
+                    'runtime.train.chunks': 1,
+                    'runtime.train.use_flash_attn': True,
+                    'runtime.train.sequence_parallel': True,
+                    
+                    'runtime.profile.profile': 1,
+                    'runtime.profile.profile_mode': args.profile_mode,
+                    'runtime.profile.profile_unit': args.profile_unit,
+                    'runtime.profile.profile_forward': 1,
+
+                    'runtime.model.model_size': args.model_info.model_size,
+                    'runtime.model.is_moe_model': args.model_info.is_moe_model,
+                    'runtime.model.model_config_path': args.model_info.model_config_path,
+                    'runtime.model.set_layernum_manually': 1,
+                    'runtime.model.set_seqlen_manually': 1,
+                }
+            else:
+                global_batch_size_list = self.get_global_batch_size_list()
+                assert len(global_batch_size_list) == 1
+                self.basic_overrides_dict = {
+                    'runtime.parallel.default_dp_type': args.profile_dp_type,
+                    'runtime.parallel.pipeline_type': 'gpipe',
+                    'runtime.parallel.mixed_precision': args.profile_mixed_precision,
+
+                    'runtime.train.global_batch_size': global_batch_size_list[0],
+                    'runtime.train.chunks': 1,
+                    'runtime.train.use_flash_attn': True,
+                    'runtime.train.sequence_parallel': True,
+
+                    'runtime.profile.profile': 1,
+                    'runtime.profile.profile_mode': args.profile_mode,
+                    'runtime.profile.profile_unit': args.profile_unit,
+                    'runtime.profile.profile_forward': 0,
+                    'runtime.profile.save_profiled_memory': 1,
+
+                    'runtime.model.model_size': args.model_info.model_size,
+                    'runtime.model.is_moe_model': args.model_info.is_moe_model,
+                    'runtime.model.model_config_path': args.model_info.model_config_path,
+                    'runtime.model.set_layernum_manually': 1,
+                    'runtime.model.set_seqlen_manually': 1,
+                }
+        
+        return self.basic_overrides_dict
+
+    def get_envs_dict(self) -> Dict[str, Any]:
+        if self.envs_dict is None:
+            # TODO: Verify that all required fields are complete.
+            self.envs_dict = {
+                'CUDA_DEVICE_MAX_CONNECTIONS': 1,
+            }
+
+        return self.envs_dict
+
+    def dict_to_str(self, d: dict, sep: str = "=") -> str:
+        string = ""
+        for key, value in d.items():
+            string += f"{key}{sep}{value} "
+        return string
 
     # =============== For Launching Profiling Scripts ===============
-    def get_bsz_list(self) -> List[int]:
-        """Get list of batch sizes for profiling
-
-        Returns:
-            List[int]: List of batch sizes based on profiling mode:
-                - static: Single batch size
-                - batch: Range of batch sizes
-                - sequence: Fixed batch size with sequence length variation
-
-        Raises:
-            AssertionError: If required batch size parameters are not set
-        """
-        args = self.args
-        if hasattr(self, "batch_size_list"):
-            return self.batch_size_list
-
-        if args.profile_mode == "static":
-            assert args.profile_batch_size is not None
-            self.batch_size_list = [args.profile_batch_size]
-        elif args.profile_mode == "batch":
-            assert args.profile_min_batch_size is not None and args.profile_max_batch_size is not None
-            self.batch_size_list = list(
-                range(args.profile_min_batch_size, args.profile_max_batch_size + 1, args.profile_batch_size_step)
-            )
-        elif args.profile_mode == "sequence":
-            self.batch_size_list = [args.profile_batch_size]
-
-        return self.batch_size_list
-
     def launch_profiling_scripts(self) -> None:
         """Launch profiling scripts for memory or computation profiling
 
@@ -190,150 +214,172 @@ class ModelProfiler(BaseProfiler):
             Memory profiling only supports sequence or static profile modes
         """
         args = self.args
-        os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
-        MODEL_ARGS, PROFILE_ARGS, LAUNCH_SCRIPTS, world_size, layernum_lists = self.prepare_launch_args()
-
         if args.profile_type == "memory":
-            self._launch_memory_profiling(MODEL_ARGS, PROFILE_ARGS, LAUNCH_SCRIPTS, world_size, layernum_lists)
+            self._launch_memory_profiling()
         elif args.profile_type == "computation":
-            self._launch_computation_profiling(MODEL_ARGS, PROFILE_ARGS, LAUNCH_SCRIPTS, layernum_lists)
+            self._launch_computation_profiling()
 
-    def _launch_memory_profiling(
-        self, MODEL_ARGS: str, PROFILE_ARGS: str, LAUNCH_SCRIPTS: str, world_size: int, layernum_lists: List[List[int]]
-    ) -> None:
-        """Launch memory profiling scripts
+    def _launch_memory_profiling(self) -> None:
+        assert self.num_layertype == 1, "Currently only support one layer type for memory profiling"
+        assert self.args.profile_mode == "sequence" or self.args.profile_mode == "static", "Memory profiling only supports sequence or static profile mode"
 
-        Args:
-            MODEL_ARGS: Model configuration arguments
-            PROFILE_ARGS: Profiling configuration arguments
-            LAUNCH_SCRIPTS: Launch script path
-            world_size: Total number of GPUs
-            layernum_lists: Lists of layer numbers for different configurations
-
-        Note:
-            Only supports sequence or static profile modes
-        """
         if self.args.profile_flow_control == "data_only":
             return
         
         args = self.args
-        CMD_LIST = []
-        assert (
-            args.profile_mode == "static" or args.profile_mode == "sequence"
-        ), "Memory profiling only supports sequence or static profile mode."
-        max_tp_deg = min(world_size, self.args.max_tp_deg)
-        if args.profile_mode != "static":
-            max_tp_deg = 1
-        sequence_length_list = list(product(*self.sequence_length_list))
-        for seq in sequence_length_list:
-            PROFILE_ARGS = self.prepare_profile_args()
-            pp_deg = 1
-            for checkpoint in [0, 1]:
-                tp_deg = 1
-                while tp_deg <= max_tp_deg:
-                    if pp_deg * tp_deg <= world_size:
-                        for enable_vocab_tp in [0, 1]:
-                            if tp_deg == 1 and enable_vocab_tp == 1:
-                                continue
-                            for layernum_list in layernum_lists:
-                                args_ = {}
-                                self.get_layernum_args(args_, layernum_list)
-                                self.get_seqlen_args(args_, seq)
-                                args_["pp_deg"] = pp_deg
-                                args_["global_tp_deg"] = tp_deg
-                                args_["global_checkpoint"] = checkpoint
-                                args_["vocab_tp"] = tp_deg if enable_vocab_tp == 1 else 1
-                                ARGS_ = self.args2str(args_)
-                                CMD = LAUNCH_SCRIPTS + MODEL_ARGS + PROFILE_ARGS + ARGS_
-                                CMD_LIST.append(CMD)
-                    if checkpoint:
-                        break
-                    tp_deg *= 2
 
+        num_nodes = int(os.getenv('NUM_NODES', -1))
+        num_gpus_per_node = int(os.getenv('NUM_GPUS_PER_NODE', -1))
+        assert num_nodes != -1 and num_gpus_per_node != -1, "NUM_NODES and NUM_GPUS_PER_NODE are not set"
+        world_size = num_nodes * num_gpus_per_node
+        max_tp_deg = min(world_size, args.profile_max_tp_deg) if args.profile_mode == 'static' else 1
+
+        layernum_tuple_list = self.get_layernum_tuple_list()     
+        seq_length_tuple_list = self.get_seq_length_tuple_list()
+        envs_dict = self.get_envs_dict()
+        basic_overrides_dict = self.get_basic_overrides_dict()
+
+        log_dir = os.path.join(self.work_dir, "logs/profile_memory")
+        os.makedirs(log_dir, exist_ok=True)
+
+        cmd_list = []
+
+        runtime_launcher = os.getenv("RUNTIME_LAUNCHER", None)
+        assert runtime_launcher is not None, "RUNTIME_LAUNCHER is not set"
+        
+        # case1: no pipeline parallelism, only tensor parallelism, no checkpoint
+        for seq_length_tuple in seq_length_tuple_list:
+            tp_deg = 1
+            while tp_deg <= max_tp_deg:
+                for enable_vocab_tp in [0, 1]:
+                    if tp_deg == 1 and enable_vocab_tp == 1:
+                        continue
+                    for layernum_tuple in layernum_tuple_list:
+                        extra_overrides_dict = {
+                            'runtime.parallel.pp_deg': 1, # no pipeline parallelism
+                            'runtime.parallel.global_tp_deg': tp_deg,
+                            'runtime.parallel.global_checkpoint': 0, # no checkpoint
+                            'runtime.parallel.vocab_tp': tp_deg if enable_vocab_tp == 1 else 1,
+                            'runtime.model.num_layers': layernum_tuple[0], # decoder-only or encoder-only
+                            'runtime.train.seq_length': seq_length_tuple[0], # decoder-only or encoder-only
+                        }
+                        extra_overrides_dict.update(basic_overrides_dict)
+                        log_name = f'pp1_tp{tp_deg}_vocab{enable_vocab_tp}_ckpt0_layernum{layernum_tuple[0]}_seq{seq_length_tuple[0]}'
+                        envs_string = self.dict_to_str(envs_dict, sep='=')
+                        overrides_string = self.dict_to_str(extra_overrides_dict, sep='=')
+                        cmd = f"{envs_string} {runtime_launcher} {self.args.runtime_yaml_template_path} {overrides_string} 2>&1 | tee {log_dir}/{log_name}.log"
+                        cmd_list.append(cmd)
+                tp_deg *= 2
+        
+        # case2: no pipeline parallelism, no tensor parallelism, only checkpoint
+        for seq_length_tuple in seq_length_tuple_list:
+            for layernum_tuple in layernum_tuple_list:
+                extra_overrides_dict = {
+                    'runtime.parallel.pp_deg': 1, # no pipeline parallelism
+                    'runtime.parallel.global_tp_deg': 1, # no tensor parallelism
+                    'runtime.parallel.global_checkpoint': 1, # only checkpoint
+                    'runtime.parallel.vocab_tp': 1, # no vocabulary parallelism
+                    'runtime.model.num_layers': layernum_tuple[0], # decoder-only or encoder-only
+                    'runtime.train.seq_length': seq_length_tuple[0], # decoder-only or encoder-only
+                }
+                extra_overrides_dict.update(basic_overrides_dict)
+                log_name = f'pp1_tp1_vocab1_ckpt1_layernum{layernum_tuple[0]}_seq{seq_length_tuple[0]}'
+                envs_string = self.dict_to_str(envs_dict, sep='=')
+                overrides_string = self.dict_to_str(extra_overrides_dict, sep='=')
+                cmd = f"{envs_string} {runtime_launcher} {self.args.runtime_yaml_template_path} {overrides_string} 2>&1 | tee {log_dir}/{log_name}.log"
+                cmd_list.append(cmd)
+
+        # case3: pipeline parallelism, tensor parallelism, no checkpoint
+        for seq_length_tuple in seq_length_tuple_list:
             for pp_deg in [2, 4]:
-                layernum = pp_deg
+                layer_num = pp_deg # At this point, each stage has exactly one layer.
                 tp_deg = 1
                 while tp_deg <= max_tp_deg:
                     if pp_deg * tp_deg <= world_size:
                         for enable_vocab_tp in [0, 1]:
                             if tp_deg == 1 and enable_vocab_tp == 1:
                                 continue
-                            args_ = {}
-                            self.get_layernum_args(args_, [layernum] * self.num_layertype)
-                            self.get_seqlen_args(args_, seq)
-                            args_["pp_deg"] = pp_deg
-                            args_["global_tp_deg"] = tp_deg
-                            args_["global_checkpoint"] = 0
-                            args_["vocab_tp"] = tp_deg if enable_vocab_tp == 1 else 1
-                            ARGS_ = self.args2str(args_)
-                            CMD = LAUNCH_SCRIPTS + MODEL_ARGS + PROFILE_ARGS + ARGS_
-                            CMD_LIST.append(CMD)
+                            
+                            extra_overrides_dict = {
+                                'runtime.parallel.pp_deg': pp_deg, # pipeline parallelism
+                                'runtime.parallel.global_tp_deg': tp_deg, # tensor parallelism
+                                'runtime.parallel.global_checkpoint': 0, # no checkpoint
+                                'runtime.parallel.vocab_tp': tp_deg if enable_vocab_tp == 1 else 1,
+                                'runtime.model.num_layers': layer_num,
+                                'runtime.train.seq_length': seq_length_tuple[0], # decoder-only or encoder-only
+                            }
+                            extra_overrides_dict.update(basic_overrides_dict)
+                            log_name = f'pp{pp_deg}_tp{tp_deg}_vocab{enable_vocab_tp}_ckpt0_layernum{layer_num}_seq{seq_length_tuple[0]}'
+                            envs_string = self.dict_to_str(envs_dict, sep='=')
+                            overrides_string = self.dict_to_str(extra_overrides_dict, sep='=')
+                            cmd = f"{envs_string} {runtime_launcher} {self.args.runtime_yaml_template_path} {overrides_string} 2>&1 | tee {log_dir}/{log_name}.log"
+                            cmd_list.append(cmd)
                     tp_deg *= 2
                     
         if self.args.profile_flow_control == "scripts_only":
-            for CMD in CMD_LIST:
-                print(CMD)
+            for cmd in cmd_list:
+                print(cmd)
             print("Start to write memory profiling scripts ...")
-            script_path = os.path.join(self.path, f"scripts/memory_profile_scripts_{self.args.profile_unit}.sh")
+            script_path = os.path.join(self.work_dir, f"scripts/memory_profile_scripts_{self.args.profile_unit}.sh")
             with open(script_path, "w") as f:
-                for CMD in CMD_LIST:
-                    f.write(CMD + "\n")
+                for cmd in cmd_list:
+                    f.write(cmd + "\n")
                     f.write("sleep 1\n")
             print(f"Memory profiling scripts have been written to {script_path}!")
         else:
-            for CMD in CMD_LIST:
-                print(CMD)
-                os.system(CMD)
+            for cmd in cmd_list:
+                print(cmd)
+                os.system(cmd)
                 
-    def _launch_computation_profiling(
-        self, MODEL_ARGS: str, PROFILE_ARGS: str, LAUNCH_SCRIPTS: str, layernum_lists: List[List[int]]
-    ) -> None:
-        """Launch computation profiling scripts
+    def _launch_computation_profiling(self) -> None:
+        assert self.num_layertype == 1, "Currently only support one layer type for computation profiling"
 
-        Args:
-            MODEL_ARGS: Model configuration arguments
-            PROFILE_ARGS: Profiling configuration arguments
-            LAUNCH_SCRIPTS: Launch script path
-            layernum_lists: Lists of layer numbers for different configurations
-
-        Note:
-            Supports all profile modes (static, batch, sequence)
-        """
         if self.args.profile_flow_control == "data_only":
             return
         
-        CMD_LIST = []
-        for layernum_list in layernum_lists:
-            args_ = {}
-            self.get_layernum_args(args_, layernum_list)
-            args_["pp_deg"] = 1
-            args_["global_tp_deg"] = 1
-            args_["global_cp_deg"] = 1
-            args_["global_checkpoint"] = 0
-            batch_size_list = self.get_bsz_list()
-            sequence_length_list = list(product(*self.sequence_length_list))
-            for bsz in batch_size_list:
-                for seq in sequence_length_list:
-                    PROFILE_ARGS = self.prepare_profile_args(batch_size=bsz)
-                    self.get_seqlen_args(args_, seq)
-                    ARGS_ = self.args2str(args_)
-                    CMD = LAUNCH_SCRIPTS + MODEL_ARGS + PROFILE_ARGS + ARGS_
-                    CMD_LIST.append(CMD)
+        runtime_launcher = os.getenv("RUNTIME_LAUNCHER", None)
+        assert runtime_launcher is not None, "RUNTIME_LAUNCHER is not set"
         
+        global_batch_size_list = self.get_global_batch_size_list()
+        layernum_tuple_list = self.get_layernum_tuple_list()     
+        seq_length_tuple_list = self.get_seq_length_tuple_list()
+        envs_dict = self.get_envs_dict()
+        basic_overrides_dict = self.get_basic_overrides_dict()
+
+        log_dir = os.path.join(self.work_dir, "logs/profile_computation")
+        os.makedirs(log_dir, exist_ok=True)
+
+        cmd_list = []
+        for gbsz in global_batch_size_list:
+            for layernum_tuple in layernum_tuple_list:
+                for seq_length_tuple in seq_length_tuple_list:
+                    extra_overrides_dict = {
+                        'runtime.train.global_batch_size': gbsz,
+                        'runtime.model.num_layers': layernum_tuple[0], # decoder-only or encoder-only
+                        'runtime.train.seq_length': seq_length_tuple[0], # decoder-only or encoder-only
+                    }
+                    extra_overrides_dict.update(basic_overrides_dict)
+
+                    log_name = f"layernum_{layernum_tuple[0]}_seq_{seq_length_tuple[0]}_gbsz_{gbsz}"
+                    envs_string = self.dict_to_str(envs_dict, sep='=')
+                    overrides_string = self.dict_to_str(extra_overrides_dict, sep='=')
+                    cmd = f"{envs_string} {runtime_launcher} {self.args.runtime_yaml_template_path} {overrides_string} 2>&1 | tee {log_dir}/{log_name}.log"
+                    cmd_list.append(cmd)
+
         if self.args.profile_flow_control == "scripts_only":
-            for CMD in CMD_LIST:
-                print(CMD)
+            for cmd in cmd_list:
+                print(cmd)
             print("Start to write computation profiling scripts ...")
-            script_path = os.path.join(self.path, f"scripts/computation_profile_scripts_{self.args.profile_unit}.sh")
+            script_path = os.path.join(self.work_dir, f"scripts/computation_profile_scripts_{self.args.profile_unit}.sh")
             with open(script_path, "w") as f:
-                for CMD in CMD_LIST:
-                    f.write(CMD + "\n")
+                for cmd in cmd_list:
+                    f.write(cmd + "\n")
                     f.write("sleep 1\n")
             print(f"Computation profiling scripts have been written to {script_path}!")
         else:
-            for CMD in CMD_LIST:
-                print(CMD)
-                os.system(CMD)
+            for cmd in cmd_list:
+                print(cmd)
+                os.system(cmd)
 
     # =============== For Processing Profiled Memory and Time ===============
     def process_profiled_data(self) -> None:
@@ -379,7 +425,7 @@ class ModelProfiler(BaseProfiler):
         
         time_config_path = self.time_profiling_path()
         config = read_json_config(time_config_path)
-        batch_size_list = self.get_bsz_list()
+        batch_size_list = self.get_global_batch_size_list()
         sequence_length_list = list(product(*self.sequence_length_list))
 
         for bsz in batch_size_list:
