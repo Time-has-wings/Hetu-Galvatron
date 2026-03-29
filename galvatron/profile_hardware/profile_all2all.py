@@ -85,7 +85,7 @@ def train(args):
         end.record()
 
         torch.cuda.synchronize()
-        print(f"device: {local_rank}, time: {start.elapsed_time(end)} ms", flush=true) # ms
+        print(f"device: {local_rank}, time: {start.elapsed_time(end)} ms", flush=True) # ms
         time_list.append(start.elapsed_time(end))
 
     # torch.cuda.cudart().cudaProfilerStop()

@@ -1,8 +1,7 @@
 import argparse
 import os
 
-from galvatron.core import HardwareProfiler
-from galvatron.core.profiler import galvatron_profile_hardware_args
+from galvatron.core.profiler import HardwareProfiler, galvatron_profile_hardware_args
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

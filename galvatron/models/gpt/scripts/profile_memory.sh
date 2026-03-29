@@ -1,13 +1,18 @@
-#!/bin/bash
-set -euo pipefail
+export NUM_NODES=1
+export NUM_GPUS_PER_NODE=8
+export MASTER_ADDR=$MASTER_ADDR
+export MASTER_PORT=$MASTER_PORT
+export NODE_RANK=$RANK
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_PATH="${SCRIPT_DIR}/profile.yaml"
 
-export PROFILE_LAUNCHER="${PROFILE_LAUNCHER:-torchrun --nnodes 1 --nproc_per_node 8}"
-export PROFILE_TRAINER="${PROFILE_TRAINER:-train_dist.py}"
+export PROFILE_LAUNCHER="${PROFILE_LAUNCHER:-torchrun --nnodes ${NUM_NODES} --nproc_per_node ${NUM_GPUS_PER_NODE}}"
+export PROFILE_TRAINER="${PROFILE_TRAINER:-train_dist.py scripts/train_dist.yaml}"
 
-python3 "${SCRIPT_DIR}/../profile.py" "${CONFIG_PATH}" \
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+GPT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${GPT_DIR}"
+
+python3 profiler.py scripts/profile.yaml \
   profiler.profile_type=memory \
   profiler.profile_mode=static \
   profiler.profile_batch_size=8 \
