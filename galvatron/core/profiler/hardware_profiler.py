@@ -10,8 +10,13 @@ class HardwareProfiler(BaseProfiler):
     """Hardware profiler for generating communication profiling scripts."""
 
     def __init__(self, args):
-        super().__init__(HardwareProfilerArgs.from_source(args))
+        super().__init__()
+        self.args = HardwareProfilerArgs.from_source(args)
         self.path = None
+
+    def set_path(self, path: str) -> None:
+        """Root directory for `scripts/` and generated logs (same layout as repo `profile_hardware/`)."""
+        self.path = path
 
     def get_env(self) -> str:
         """Get environment configuration as string
@@ -54,7 +59,10 @@ class HardwareProfiler(BaseProfiler):
 
         # Generate allreduce test script
         def allreduce_script(allreduce_size: int, allreduce_consec: int) -> str:
-            log_name = f"logs/allreduce_world_size{allreduce_size}_consec{allreduce_consec}_profile_time0.log"
+            log_name = (
+                f"logs/allreduce/allreduce_world_size{allreduce_size}_consec{allreduce_consec}"
+                "_profile_time0.log"
+            )
             return (
                 f"{torchrun_prefix} \\\n"
                 "    profile_allreduce.py \\\n"
@@ -68,7 +76,7 @@ class HardwareProfiler(BaseProfiler):
         config_dir = os.path.join(self.path, "./scripts")
         with open(os.path.join(config_dir, "profile_allreduce.sh"), "w") as f:
             f.write(env)
-            f.write("mkdir -p logs\n")
+            f.write("mkdir -p logs/allreduce\n")
             allreduce_size = num_nodes * num_gpus_per_node
             while allreduce_size > 1:
                 for allreduce_consec in [1, 0]:
@@ -84,7 +92,7 @@ class HardwareProfiler(BaseProfiler):
 
         # Generate p2p test script
         def p2p_script(pp_deg: int) -> str:
-            log_name = f"logs/p2p_pp_deg{pp_deg}.log"
+            log_name = f"logs/p2p/p2p_pp_deg{pp_deg}.log"
             return (
                 f"{torchrun_prefix} \\\n"
                 "    profile_p2p.py \\\n"
@@ -95,7 +103,7 @@ class HardwareProfiler(BaseProfiler):
         # Write p2p test script
         with open(os.path.join(config_dir, "profile_p2p.sh"), "w") as f:
             f.write(env)
-            f.write("mkdir -p logs\n")
+            f.write("mkdir -p logs/p2p\n")
             pp_deg = 2
             while pp_deg <= world_size and pp_deg <= self.args.max_pp_deg:
                 script = p2p_script(pp_deg)
@@ -126,7 +134,7 @@ class HardwareProfiler(BaseProfiler):
 
         def allreduce_script(allreduce_size: int, allreduce_consec: int, buffer_size: int) -> str:
             log_name = (
-                f"logs/allreduce_sp_world_size{allreduce_size}_consec{allreduce_consec}"
+                f"logs/allreduce_sp/allreduce_sp_world_size{allreduce_size}_consec{allreduce_consec}"
                 f"_local_batch_size{buffer_size}_profile_time1.log"
             )
             return (
@@ -145,7 +153,7 @@ class HardwareProfiler(BaseProfiler):
         # Write allreduce test script with sequence parallelism
         with open(os.path.join(config_dir, "profile_allreduce_sp.sh"), "w") as f:
             f.write(env)
-            f.write("mkdir -p logs\n")
+            f.write("mkdir -p logs/allreduce_sp\n")
             allreduce_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
             while allreduce_size > 1:
                 buffer_size = 1024
@@ -161,7 +169,7 @@ class HardwareProfiler(BaseProfiler):
 
         def all2all_script(allreduce_size: int, buffer_size: int) -> str:
             log_name = (
-                f"logs/all2all_sp_world_size{allreduce_size}"
+                f"logs/all2all_sp/all2all_sp_world_size{allreduce_size}"
                 f"_local_batch_size{buffer_size}.log"
             )
             return (
@@ -175,7 +183,7 @@ class HardwareProfiler(BaseProfiler):
         # Write all-to-all test script
         with open(os.path.join(config_dir, "profile_all2all_sp.sh"), "w") as f:
             f.write(env)
-            f.write("mkdir -p logs\n")
+            f.write("mkdir -p logs/all2all_sp\n")
             all2all_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
             while all2all_size > 1:
                 buffer_size = 1024
