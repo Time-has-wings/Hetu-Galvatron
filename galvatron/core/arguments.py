@@ -148,6 +148,8 @@ def load_with_hydra(
         args = args.runtime
     elif mode == "model_profiler":
         args = args.model_profiler
+    elif mode == "profiler_hardware":
+        args = args.profiler_hardware
     elif mode == "search":
         args = args.search_engine
     return args
