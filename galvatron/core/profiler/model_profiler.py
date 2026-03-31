@@ -22,7 +22,7 @@ class ModelProfiler(BaseProfiler):
             args: Arguments containing profiling configuration including:
                 - profile_mode: Profiling mode ('static', 'batch', or 'sequence')
                 - profile_type: Type of profiling ('computation' or 'memory')
-                - profile_batch_size: Batch size for static profiling
+                - profile_fixed_batch_size: Batch size for static profiling
                 - profile_min/max_batch_size: Range for batch size profiling
                 - profile_min/max_seq_length: Range for sequence length profiling
                 - profile_batch/seq_length_step: Step size for profiling
@@ -400,7 +400,9 @@ class ModelProfiler(BaseProfiler):
         - Computation results: time_config_path
         - Memory results: memory_config_path
         """
-        _, _, _, world_size, layernum_lists = self.prepare_launch_args()
+        env_args = self.env_args()
+        world_size = int(env_args["NUM_NODES"]) * int(env_args["NUM_GPUS_PER_NODE"])
+        layernum_lists = [list(layernum_tuple) for layernum_tuple in self.get_layernum_tuple_list()]
         args = self.args
 
         if args.profile_type == "computation":
@@ -426,7 +428,7 @@ class ModelProfiler(BaseProfiler):
         time_config_path = self.time_profiling_path()
         config = read_json_config(time_config_path)
         batch_size_list = self.get_global_batch_size_list()
-        sequence_length_list = list(product(*self.sequence_length_list))
+        sequence_length_list = self.get_seq_length_tuple_list()
 
         for bsz in batch_size_list:
             for seq in sequence_length_list:
@@ -440,8 +442,10 @@ class ModelProfiler(BaseProfiler):
                 for idx, layernum in enumerate(layernum_lists[1:]):
                     key = self.key_format(layernum, bsz, seq_info)
                     val = config[key]
-                    avg_time = (val - val_base) / bsz / (self.args.layernum_max - self.args.layernum_min)
-                    write_key = f"layertype_{idx}_bsz{bsz}_seq{seq[idx]}"
+                    avg_time = (val - val_base) / bsz / (
+                        self.args.profile_layernum_max - self.args.profile_layernum_min
+                    )
+                    write_key = f"layertype{idx}_bsz{bsz}_seq{seq[idx]}"
                     config[write_key] = avg_time
                     total_avg_time.append(avg_time)
 
@@ -450,7 +454,7 @@ class ModelProfiler(BaseProfiler):
                 for idx in range(len(total_avg_time)):
                     other_time -= layernum_lists[0][idx] * total_avg_time[idx] * bsz
                 other_time /= bsz
-                write_key = f"layertype_other_bsz{bsz}_{seq_info}"
+                write_key = f"layertypeother_bsz{bsz}_{seq_info}"
                 config[write_key] = max(other_time, 0)
 
                 # Write results to config file
@@ -487,14 +491,15 @@ class ModelProfiler(BaseProfiler):
         config = read_json_config(memory_config_path)
 
         # Initialize parameters
-        bsz = self.args.profile_batch_size
+        assert self.args.profile_fixed_batch_size is not None, "Memory profiling data processing expects profile_fixed_batch_size"
+        bsz = self.args.profile_fixed_batch_size
         layernum_list_base = layernum_lists[0]
         layertype = len(layernum_list_base)
         layernum_lists = layernum_lists[1:]
-        layernum_diff = self.args.layernum_max - self.args.layernum_min
+        layernum_diff = self.args.profile_layernum_max - self.args.profile_layernum_min
 
         # Process each sequence length configuration
-        sequence_length_list = list(product(*self.sequence_length_list))
+        sequence_length_list = self.get_seq_length_tuple_list()
         for seq in sequence_length_list:
             self._process_single_sequence_config(
                 seq, world_size, layernum_list_base, layertype, layernum_lists, layernum_diff, bsz, config
@@ -780,7 +785,13 @@ class ModelProfiler(BaseProfiler):
             config_key = f"{key}{suffix}"
             if config_key not in config:
                 config[config_key] = {}
-            config[config_key][seq_info[3:]] = copy.deepcopy(value)
+            if seq_info.startswith("seq_"):
+                seq_key = seq_info[4:]
+            elif seq_info.startswith("seq"):
+                seq_key = seq_info[3:]
+            else:
+                seq_key = seq_info
+            config[config_key][seq_key] = copy.deepcopy(value)
 
     # =============== Util functions ===============
     def key_format(
@@ -805,10 +816,10 @@ class ModelProfiler(BaseProfiler):
 
         Example:
             >>> key_format([1,2,3], 32, "seq128", 0, "ms")
-            "layernum[1,2,3]_bsz32_seq128_rank0_ms"
+            "layernum1_2_3_bsz32_seq128_rank0_ms"
         """
         if isinstance(layernum, list):
-            s = f"layernum[{array2str(layernum)}]"
+            s = "layernum" + "_".join(str(v) for v in layernum)
         else:
             s = f"layernum{layernum}"
 
@@ -860,120 +871,6 @@ class ModelProfiler(BaseProfiler):
         end_idx = int(np.sum(pp_divide[: stage_idx + 1]))
         return np.sum(layer_costs[start_idx:end_idx])
 
-    def prepare_profile_args(self, batch_size: Optional[int] = None) -> str:
-        """Prepare profiling arguments string
-
-        Args:
-            batch_size: Optional batch size override
-
-        Returns:
-            str: Formatted profiling arguments string including extra arguments
-
-        Note:
-            Handles extra arguments from args.extra_args_str if present
-        """
-        profile_args = self.profiling_general_args(batch_size)
-        PROFILE_ARGS = self.args2str(profile_args)
-
-        # zsh: Revise to accept extra_args_str
-        if hasattr(self.args, "extra_args_str"):
-            extra_args_list = self.args.extra_args_str.split("/")
-            for arg in extra_args_list:
-                if arg != "":
-                    PROFILE_ARGS += f" --{arg}"
-        return PROFILE_ARGS
-
-    def prepare_launch_args(self) -> Tuple[str, str, str, int, List[List[int]]]:
-        """Prepare all arguments needed for launching profiling
-
-        Returns:
-            Tuple containing:
-            - MODEL_ARGS (str): Model configuration string
-            - PROFILE_ARGS (str): Profiling configuration string
-            - LAUNCH_SCRIPTS (str): Launch script path
-            - world_size (int): Total number of GPUs
-            - layernum_lists (List[List[int]]): Lists of layer numbers
-
-        Note:
-            Excludes profiling-specific arguments from model arguments
-        """
-        assert self.layernum_arg_names is not None
-        # Define profiling-specific argument names to exclude
-        profile_arg_names = [
-            "profile_type",
-            "set_model_config_manually",
-            "set_layernum_manually",
-            "set_seqlen_manually",
-            "profile_batch_size",
-            "profile_min_batch_size",
-            "profile_max_batch_size",
-            "profile_batch_size_step",
-            "profile_seq_length_list",
-            "profile_min_seq_length",
-            "profile_max_seq_length",
-            "profile_seq_length_step",
-            "layernum_min",
-            "layernum_max",
-            "max_tp_deg",
-            "profile_dp_type",
-            "mixed_precision",
-            "use_flash_attn",
-            "sequence_parallel",
-            "attention_dropout",
-            "hidden_dropout",
-            "kv_channels",
-            "make_vocab_size_divisible_by",
-            "padded_vocab_size",
-            "ffn_hidden_size",
-            "group_query_attention",
-            "num_query_groups",
-            "add_bias_linear",
-            "swiglu",
-            "activation_func",
-            "extra_args_str",
-            "seq_length",
-            "encoder_seq_length",
-            "decoder_seq_length",
-            "is_moe_model",
-            "profile_flow_control",
-            "parallel",
-            "profile",
-        ]
-        exclude_arg_names = profile_arg_names + self.layernum_arg_names
-        MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)
-        # print(MODEL_ARGS)
-
-        PROFILE_ARGS = self.prepare_profile_args()
-        # print(PROFILE_ARGS)
-
-        env_args = self.env_args()
-        LAUNCH_SCRIPTS = self.launch_scripts(env_args)
-        print("Get environment args:", env_args)
-
-        world_size = int(env_args["NUM_NODES"]) * int(env_args["NUM_GPUS_PER_NODE"])
-
-        layernum_lists = self.get_layernum_list_for_profiling()
-
-        return MODEL_ARGS, PROFILE_ARGS, LAUNCH_SCRIPTS, world_size, layernum_lists
-
-    def get_layernum_list_for_profiling(self) -> List[List[int]]:
-        """Generate layer number combinations for profiling
-
-        Returns:
-            List[List[int]]: List of layer number combinations:
-                - First list contains minimum layer numbers for all layer types
-                - Subsequent lists vary one layer type to maximum while keeping others at minimum
-        """
-        layernum_lists = []
-        base_list = [self.args.layernum_min] * self.num_layertype
-        layernum_lists.append(base_list)
-
-        for idx in range(self.num_layertype):
-            l = base_list.copy()
-            l[idx] = self.args.layernum_max
-            layernum_lists.append(l)
-        return layernum_lists
-
     def argval2str(self, val: Union[List, Any]) -> str:
         """Convert argument value to string format
 
@@ -1019,95 +916,6 @@ class ModelProfiler(BaseProfiler):
                 if key not in exclude_args:
                     s += self.arg2str(key, val)
         return s
-
-    def profiling_general_args(self, batch_size: Optional[int] = None) -> Dict[str, Union[int, float, str]]:
-        """Get general profiling arguments
-
-        Args:
-            batch_size: Optional batch size override
-
-        Returns:
-            Dict: Dictionary of general profiling arguments including:
-                - Model configuration settings
-                - Training parameters
-                - Profiling flags
-                - Parallelism settings
-        """
-        args = {
-            "set_model_config_manually": 0,
-            "set_layernum_manually": 1,
-            "set_seqlen_manually": 1,
-            "global_train_batch_size": self.args.profile_batch_size if batch_size is None else batch_size,
-            "epochs": 10,
-            "lr": 1e-4,
-            "adam_weight_decay": 0.01,
-            "dropout_prob": 0.1,
-            "print_loss": 0,
-            "profile": 1,
-            "save_profiled_memory": 1 if self.args.profile_type == "memory" else 0,
-            "profile_forward": 1 if self.args.profile_type == "computation" else 0,
-            "initialize_on_meta": 1,
-            "global_tp_consec": 1,
-            "sdp": 1 if self.args.profile_dp_type == "zero3" and self.args.profile_type == "memory" else 0,
-            "chunks": 1,
-            "pipeline_type": "gpipe",
-            "default_dp_type": self.args.profile_dp_type if self.args.profile_type == "memory" else "ddp",
-            "mixed_precision": self.args.mixed_precision,
-            "shape_order": self.args.shape_order,
-        }
-
-        # Add optional flags
-        if self.args.use_flash_attn:
-            args["use-flash-attn"] = ""
-        if self.args.sequence_parallel:
-            args["sequence-parallel"] = ""
-        if hasattr(self.args, "is_moe_model") and self.args.is_moe_model:
-            args["is_moe_model"] = ""
-        return args
-
-    def get_layernum_args(self, args: Dict[str, Any], layernum_list: List[int]) -> None:
-        """Set layer number arguments in the configuration dictionary
-
-        Args:
-            args: Configuration dictionary to update
-            layernum_list: List of layer numbers for each layer type
-
-        Note:
-            Handles two formats of layer number arguments:
-            1. Individual arguments for each layer type (layernum_listed=False)
-            2. Single list argument for all layers (layernum_listed=True, e.g., Swin `depths`)
-        """
-        assert (
-            len(layernum_list) == self.num_layertype
-        ), f"Expected {self.num_layertype} layer numbers, got {len(layernum_list)}"
-
-        if not self.layernum_listed:
-            # Set individual arguments for each layer type
-            for layernum, arg_name in zip(layernum_list, self.layernum_arg_names):
-                args[arg_name] = layernum
-        else:
-            # Set single list argument for all layers (e.g., Swin Transformer depths)
-            assert len(self.layernum_arg_names) == 1, "List format requires exactly one argument name"
-            arg_name = self.layernum_arg_names[0]
-            args[arg_name] = layernum_list
-
-    def get_seqlen_args(self, args: Dict[str, Any], seqlen_list: List[int]) -> None:
-        """Set sequence length arguments in the configuration dictionary
-
-        Args:
-            args: Configuration dictionary to update
-            seqlen_list: List of sequence lengths for each layer type
-        """
-        assert (
-            len(seqlen_list) == self.num_layertype
-        ), f"Expected {self.num_layertype} sequence lengths, got {len(seqlen_list)}"
-
-        # Swin model does not support set seqlen manually
-        if self.seqlen_arg_names is None:
-            return
-        
-        for seqlen, arg_name in zip(seqlen_list, self.seqlen_arg_names):
-            args[arg_name] = seqlen
 
     def env_args(self) -> Dict[str, Union[str, int]]:
         """Get environment configuration arguments

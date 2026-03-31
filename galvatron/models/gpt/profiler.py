@@ -17,7 +17,7 @@ if __name__ == '__main__':
     path = os.path.dirname(os.path.abspath(__file__))
     model_profiler.set_profiler_launcher(
         path=path,
-        model_name='llama2-7b', # TODO: modify this trick
+        model_name=args.model_info.model_size,
     )
-    model_profiler.launch_profiling_scripts()
-    # model_profiler.process_profiled_data() # TODO: complete this function
+    # model_profiler.launch_profiling_scripts()
+    model_profiler.process_profiled_data() 

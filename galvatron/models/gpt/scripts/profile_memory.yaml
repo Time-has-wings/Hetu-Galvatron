@@ -3,7 +3,7 @@ model_profiler:
   profile_type: memory
   profile_mode: static
   profile_unit: all
-  profile_flow_control: scripts_only
+  profile_flow_control: all
   profile_mixed_precision: bf16
   profile_fixed_batch_size: 8
   profile_fixed_seq_length_list: [2048]

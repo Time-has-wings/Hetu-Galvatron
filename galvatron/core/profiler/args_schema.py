@@ -1,24 +1,9 @@
 """Pydantic models for Galvatron profiler arguments. Merged view: galvatron.core.args_schema."""
-from typing import Any, Dict, Iterable, Literal, Mapping, Optional, List
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from galvatron.core.runtime.args_schema import GalvatronModelArgs
-
-def _source_to_dict(source: Any) -> Dict[str, Any]:
-    if source is None:
-        return {}
-    if isinstance(source, Mapping):
-        return dict(source)
-    if hasattr(source, "_get_kwargs"):
-        kwargs = source._get_kwargs()
-        if isinstance(kwargs, Mapping):
-            return dict(kwargs)
-        if isinstance(kwargs, Iterable):
-            return {k: v for k, v in kwargs}
-    if hasattr(source, "__dict__"):
-        return dict(vars(source))
-    raise TypeError(f"Unsupported args source type: {type(source)}")
 
 
 class GalvatronModelProfilerArgs(BaseModel):
@@ -44,6 +29,9 @@ class GalvatronModelProfilerArgs(BaseModel):
 
     profile_max_tp_deg: int = Field(default=8, description="Maximum tensor parallel degree to profile.")
     profile_dp_type: Literal["zero3", "ddp"] = Field(default="zero3", description="Use zero3 or ddp to profile.")
+    # NOTE: profiler pipeline currently assumes SP-enabled memory keys by default.
+    # Keep default True to match existing profiling workflow unless explicitly overridden.
+    sequence_parallel: bool = Field(default=True, description="Whether to use sequence parallel profiling keys.")
 
     runtime_yaml_template_path: Optional[str] = Field(default=None, description="Runtime yaml template path.")
 
@@ -68,16 +56,3 @@ class ProfilerHardwareArgs(BaseModel):
         default=4,
         description="The multiple of communication time and computation time when overlapped.",
     )
-
-    @classmethod
-    def from_source(cls, source: Any) -> "ProfilerHardwareArgs":
-        if isinstance(source, cls):
-            return source
-        return cls.model_validate(_source_to_dict(source))
-
-    def _get_kwargs(self):
-        return list(self.model_dump().items())
-
-# Backward-compatible aliases.
-ModelProfilerArgs = GalvatronModelProfilerArgs
-HardwareProfilerArgs = ProfilerHardwareArgs
