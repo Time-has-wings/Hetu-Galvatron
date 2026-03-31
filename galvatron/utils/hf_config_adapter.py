@@ -347,7 +347,7 @@ def model_name(args) -> str:
     if hasattr(args, "profile"):
         if getattr(args.profile, "profile_mode", "sequence") != "sequence":
             seq = args.train.seq_length or 0
-            return f"{name}_seqlen{seq}"
+            # return f"{name}_seqlen{seq}"
     return str(name)
 
 

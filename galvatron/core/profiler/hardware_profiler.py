@@ -2,16 +2,16 @@ import os
 
 from galvatron.utils.config_utils import read_json_config, write_json_config
 
-from .args_schema import HardwareProfilerArgs
+from .args_schema import ProfilerHardwareArgs
 from .base_profiler import BaseProfiler
 
 
 class HardwareProfiler(BaseProfiler):
     """Hardware profiler for generating communication profiling scripts."""
 
-    def __init__(self, args):
+    def __init__(self, args: ProfilerHardwareArgs):
         super().__init__()
-        self.args = HardwareProfilerArgs.from_source(args)
+        self.args = args
         self.path = None
 
     def set_path(self, path: str) -> None:

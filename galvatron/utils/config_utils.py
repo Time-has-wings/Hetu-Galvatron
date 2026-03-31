@@ -1,7 +1,7 @@
 import json
 import os
 from .strategy_utils import form_strategy
-from typing import List
+from typing import Sequence
 import numpy as np
 from scipy.optimize import curve_fit
 import torch
@@ -94,14 +94,17 @@ def read_p2p_bandwidth_config(config_path):
     return p2p_dict, comm_coe_dict
 
 def num2str(num, name):
-    if name == 'seq':
-        if len(num) == 1:
-            num = num[0]
-    if isinstance(num, List):
-        info = '%s[%s]'%(name, array2str(num))
-    else:
-        info = '%s%d'%(name, num)
-    return info
+    """Format numeric key parts used in profiling JSON keys.
+
+    Examples:
+    - num2str([2, 4], "layernum") -> "layernum2_4"
+    - num2str([2048], "seq") -> "seq2048"
+    - num2str(2048, "seq") -> "seq2048"
+    """
+    if isinstance(num, Sequence) and not isinstance(num, (str, bytes)):
+        values = list(num)
+        return f"{name}{'_'.join(str(v) for v in values)}"
+    return f"{name}{num}"
 
 def dict_join_dirname(dic, dirname):
     for key, val in dic.items():
