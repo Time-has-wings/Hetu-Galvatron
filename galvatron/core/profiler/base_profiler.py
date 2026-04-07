@@ -23,9 +23,9 @@ class BaseProfiler():
             return self.mem_path
         assert self.model_name is not None, "Should specify the model name!"
         args = self.args
-        memory_config_path = "configs/memory_profiling_%s_%s.json" % (args.mixed_precision, self.model_name)
-        if hasattr(args, "profile_unit"):
-            memory_config_path = f'configs/memory_profiling_{args.mixed_precision}_{self.model_name}_{args.profile_unit}.json'
+        mixed_precision = args.parallel.mixed_precision
+        profile_unit = args.profile.profile_unit
+        memory_config_path = f'configs/memory_profiling_{mixed_precision}_{self.model_name}_{profile_unit}.json'
         self.mem_path = os.path.join(self.path, memory_config_path)
         return self.mem_path
 
@@ -39,8 +39,8 @@ class BaseProfiler():
             return self.time_path
         assert self.model_name is not None, "Should specify the model name!"
         args = self.args
-        time_config_path = "configs/computation_profiling_%s_%s.json" % (args.mixed_precision, self.model_name)
-        if hasattr(args, "profile_unit"):
-            time_config_path = f'configs/computation_profiling_{args.mixed_precision}_{self.model_name}_{args.profile_unit}.json'
+        mixed_precision = args.parallel.mixed_precision
+        profile_unit = args.profile.profile_unit
+        time_config_path = f'configs/computation_profiling_{mixed_precision}_{self.model_name}_{profile_unit}.json'
         self.time_path = os.path.join(self.path, time_config_path)
         return self.time_path

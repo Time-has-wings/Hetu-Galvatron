@@ -23,14 +23,14 @@ class MemoryCostModel:
                 max_tp: int = -1,
                 stage_idx: int = 0,
                 vsp: int = 0, 
-                embed_sdp: bool = False,
+                vocab_sdp: bool = False,
                 model_args: ModelArgs = None,
                 train_args: TrainArgs = None,
                 parallel_args: ParallelArgs = None,
                 profile_model_args: ProfileModelArgs = None,
                 logger:Logger = None):
         
-        self.__post_init__(strategy, global_batch_size, mbsz, min_tp, max_tp, stage_idx, vsp, embed_sdp, model_args, train_args, parallel_args, profile_model_args, logger)
+        self.__post_init__(strategy, global_batch_size, mbsz, min_tp, max_tp, stage_idx, vsp, vocab_sdp, model_args, train_args, parallel_args, profile_model_args, logger)
         self.initialize()
         self.estimate_parameter_size()
         self.estimate_model_states_size()
@@ -38,7 +38,7 @@ class MemoryCostModel:
         self.estimate_other_memory_cost()
         
     
-    def __post_init__(self, strategy, global_batch_size: int = 8, mbsz: int = -1, min_tp: int = -1, max_tp: int = -1, stage_idx: int = 0, vsp: int = 0, embed_sdp: bool = False,
+    def __post_init__(self, strategy, global_batch_size: int = 8, mbsz: int = -1, min_tp: int = -1, max_tp: int = -1, stage_idx: int = 0, vsp: int = 0, vocab_sdp: bool = False,
                         model_args: ModelArgs = None, train_args:TrainArgs = None, parallel_args: ParallelArgs = None, profile_model_args: ProfileModelArgs = None, logger:Logger = None):
         # validate arguments
         assert mbsz > -1, f'Invalid mbsz: {mbsz}'
@@ -54,7 +54,7 @@ class MemoryCostModel:
         self.args.max_tp = max_tp
         self.args.stage_idx = stage_idx
         self.args.vsp = vsp
-        self.args.embed_sdp = embed_sdp
+        self.args.vocab_sdp = vocab_sdp
         self.logger = logger
         components = {'ProfileModelArgs': profile_model_args, 'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args}
         for class_name, instance in components.items():
@@ -166,10 +166,10 @@ class MemoryCostModel:
             # Determine the memory ratio for Zero optimization
             if args.vsp:
                 model_tp = 1
-                other_ms_zero2_ratio = self.zero3_ratio(self.tp_size * self.dp_size) if args.embed_sdp else (self.zero2_ratio(self.tp_size * self.dp_size) if args.use_zero2_for_dp else 1.0)
+                other_ms_zero2_ratio = self.zero3_ratio(self.tp_size * self.dp_size) if args.vocab_sdp else (self.zero2_ratio(self.tp_size * self.dp_size) if args.use_zero2_for_dp else 1.0)
             else:
                 model_tp = tp
-                other_ms_zero2_ratio = self.zero3_ratio(self.tp_size * self.dp_size // tp) if args.embed_sdp else (self.zero2_ratio(self.tp_size * self.dp_size // tp) if args.use_zero2_for_dp else 1.0)
+                other_ms_zero2_ratio = self.zero3_ratio(self.tp_size * self.dp_size // tp) if args.vocab_sdp else (self.zero2_ratio(self.tp_size * self.dp_size // tp) if args.use_zero2_for_dp else 1.0)
                         
             # Handle different memory consumption scenarios based on pipeline size (PP Size)
             if self.pp_size == 1:
@@ -479,7 +479,7 @@ class OtherTimeCostModel:
                 pp_deg:int = 2, 
                 world_size:int = 8, 
                 vsp:bool = False, 
-                embed_sdp:bool = False,
+                vocab_sdp:bool = False,
                 min_tp:int = 1, 
                 max_tp:int = 8, 
                 sequence_length_list:list = [512], 
@@ -489,7 +489,7 @@ class OtherTimeCostModel:
                 profile_model_args:ProfileModelArgs = None, 
                 profile_hardware_args:ProfileHardwareArgs = None,
                 logger:Logger = None):
-        self.__post_init__(mbsz, pp_deg, world_size, vsp, embed_sdp, min_tp, max_tp, sequence_length_list, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args, logger)
+        self.__post_init__(mbsz, pp_deg, world_size, vsp, vocab_sdp, min_tp, max_tp, sequence_length_list, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args, logger)
     
         args = self.args
         
@@ -508,7 +508,7 @@ class OtherTimeCostModel:
         self.estimate_fct_time()
         self.estimate_dp_time()
     
-    def __post_init__(self, mbsz:int = 1, pp_deg:int = 2, world_size:int = 8, vsp:bool = False, embed_sdp:bool = False, min_tp:int = 1, max_tp:int = 8, sequence_length_list:list = [512],
+    def __post_init__(self, mbsz:int = 1, pp_deg:int = 2, world_size:int = 8, vsp:bool = False, vocab_sdp:bool = False, min_tp:int = 1, max_tp:int = 8, sequence_length_list:list = [512],
              model_args:ModelArgs = None, train_args:TrainArgs = None, parallel_args:ParallelArgs = None, profile_model_args:ProfileModelArgs = None, profile_hardware_args:ProfileHardwareArgs = None, logger:Logger = None):
         # Validate
         assert all(x is not None for x in (model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)), "One or more variables are None"
@@ -519,7 +519,7 @@ class OtherTimeCostModel:
         self.args.pp_deg = pp_deg
         self.args.world_size = world_size
         self.args.vsp = vsp
-        self.args.embed_sdp = embed_sdp
+        self.args.vocab_sdp = vocab_sdp
         self.args.min_tp = min_tp
         self.args.max_tp = max_tp
         self.args.sequence_length_list = sequence_length_list
@@ -618,7 +618,7 @@ class OtherTimeCostModel:
                     self.dp_size[k] = (args.other_memory_pp_on['last_stage']['model_states'][1] / 4, args.other_memory_pp_on['last_stage']['model_states'][1] / 4)
             k *= 2
 
-        if args.embed_sdp:
+        if args.vocab_sdp:
             self.fwd_factor = 0.5
             self.bwd_factor = 1.0
         else:

@@ -6,28 +6,22 @@ from typing import List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
-from megatron.core import parallel_state
-from megatron.core.parallel_state import (
-    get_expert_model_parallel_group,
-    get_expert_tensor_and_model_parallel_group,
-    get_expert_tensor_parallel_group,
-    get_expert_tensor_parallel_rank,
-)
-from megatron.core.tensor_parallel import (
+from galvatron.core.runtime import parallel_state
+from galvatron.core.runtime.tensor_parallel.mappings import (
     all_to_all,
     gather_from_sequence_parallel_region,
     reduce_scatter_to_sequence_parallel_region,
 )
-from megatron.core.transformer.moe.fused_a2a import fused_combine, fused_dispatch
-from megatron.core.transformer.moe.moe_utils import (
+from galvatron.core.runtime.moe.fused_a2a import fused_combine, fused_dispatch
+from galvatron.core.runtime.moe.moe_utils import (
     get_capacity,
     maybe_move_tensor_to_cpu,
     permute,
     sort_chunks_by_idxs,
     unpermute,
 )
-from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
-from megatron.core.transformer.transformer_config import TransformerConfig
+from galvatron.core.runtime.moe.mlp import SharedExpertMLP
+from galvatron.core.runtime.args_schema import GalvatronModelArgs
 
 """ We use the following notation throughout this file:
      H: hidden size
@@ -45,7 +39,7 @@ class MoETokenDispatcher:
     MoE Token Dispatcher
     """
 
-    def __init__(self, config: TransformerConfig, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None) -> None:
+    def __init__(self, config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None) -> None:
         """
         Initialize the MoE Token Dispatcher.
         """
@@ -120,7 +114,7 @@ class MoEAllGatherTokenDispatcher(MoETokenDispatcher):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: TransformerConfig, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None
+        self, num_local_experts: int, local_expert_indices: List[int], config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None
     ) -> None:
         """
         Initialize the zero token dropping router.
@@ -286,7 +280,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: TransformerConfig, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None,
+        self, num_local_experts: int, local_expert_indices: List[int], config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None,
         layer_number: int = None,
     ) -> None:
         """
@@ -295,7 +289,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
         Args:
             num_local_experts (int): Number of local experts on the current device.
             local_expert_indices (List[int]): Indices of local experts on the current device.
-            config (TransformerConfig): Configuration for the transformer model.
+            config (GalvatronModelArgs): Configuration for the transformer model.
         """
         super().__init__(config=config, ep_group=ep_group, tp_of_ep_group=tp_of_ep_group, tp_and_ep_group=tp_and_ep_group)
         self.layer_number = layer_number
@@ -930,7 +924,7 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: TransformerConfig, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None
+        self, num_local_experts: int, local_expert_indices: List[int], config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None
     ):
         super().__init__(config, ep_group, tp_of_ep_group, tp_and_ep_group)
 

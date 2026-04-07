@@ -51,7 +51,7 @@ def train(args):
         torch.set_grad_enabled(False)
 
     for ep in range(args.epochs):
-        if not args.check_loss and not args.profile:
+        if not args.print_loss and not args.profile:
             trainloader = tqdm(trainloader)
         for iter, batch in enumerate(trainloader):
             tokens, kwargs, loss_func = batch

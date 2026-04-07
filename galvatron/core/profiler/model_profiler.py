@@ -992,7 +992,7 @@ class ModelProfiler(BaseProfiler):
             "lr": 1e-4,
             "adam_weight_decay": 0.01,
             "dropout_prob": 0.1,
-            "check_loss": 0,
+            "print_loss": 0,
             "profile": 1,
             "save_profiled_memory": 1 if self.args.profile_type == "memory" else 0,
             "profile_forward": 1 if self.args.profile_type == "computation" else 0,

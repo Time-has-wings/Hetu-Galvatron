@@ -1,9 +1,6 @@
 import torch
 from einops import rearrange
 
-# from megatron.core.parallel_state import (
-#     get_global_memory_buffer,
-# )
 
 def _zigzag_transformation(input_, cp_world_size):
     if cp_world_size == 1:
@@ -56,7 +53,7 @@ def _split_along_first_dim_with_sequence_parallel(input_, split_cp_group, split_
     # Bypass the function if we are using only 1 GPU.
     if tp_sp_cp_world_size == 1:
         return input_   
-    if args.sequence_parallel:
+    if args.train.sequence_parallel:
         dim_size = list(input_.size())
         dim_size[0] = dim_size[0] * tp_sp_cp_world_size
         output = torch.empty(dim_size, dtype=input_.dtype, device=torch.cuda.current_device())
@@ -68,7 +65,7 @@ def _split_along_first_dim_with_sequence_parallel(input_, split_cp_group, split_
     if cp_world_size > 1:
         output = _reverse_zigzag_transformation(output, cp_world_size)
 
-    if args.shape_order == "SBH": 
+    if args.model.shape_order == "SBH": 
         output = rearrange(output, "s b h -> b s h")
 
     # Split along first dimension.
@@ -78,7 +75,7 @@ def _split_along_first_dim_with_sequence_parallel(input_, split_cp_group, split_
     rank = torch.distributed.get_rank(group=split_tp_sp_cp_group)
     dim_offset = rank * local_dim_size
 
-    if args.shape_order == "SBH":  # [b, s, h] -> [s, b, h]
+    if args.model.shape_order == "SBH":  # [b, s, h] -> [s, b, h]
         output = output[dim_offset : dim_offset + local_dim_size].permute(1, 0, 2).contiguous()
     else:
         output = output[dim_offset : dim_offset + local_dim_size].contiguous()
@@ -97,7 +94,7 @@ def _gather_along_first_dim_with_sequence_parallel(input_, allgather_cp_group, a
     if tp_sp_cp_world_size == 1:
         return input_
 
-    if args.shape_order == "SBH":  # [s, b, h] -> [b, s, h]
+    if args.model.shape_order == "SBH":  # [s, b, h] -> [b, s, h]
         input_ = rearrange(input_, "s b h -> b s h")
 
     dim_size = list(input_.size())
@@ -107,7 +104,7 @@ def _gather_along_first_dim_with_sequence_parallel(input_, allgather_cp_group, a
 
     torch.distributed.all_gather_into_tensor(output, input_.contiguous(), group=allgather_tp_sp_cp_group)
 
-    if args.shape_order == "SBH":  # [s, b, h] -> [b, s, h]
+    if args.model.shape_order == "SBH":  # [s, b, h] -> [b, s, h]
         output = rearrange(output, "b s h -> s b h")
     # else:
     #     if args.sequence_parallel:
@@ -116,7 +113,7 @@ def _gather_along_first_dim_with_sequence_parallel(input_, allgather_cp_group, a
     if cp_world_size > 1:
         output = _zigzag_transformation(output, cp_world_size)
 
-    if args.sequence_parallel:
+    if args.train.sequence_parallel:
         dim_size = output.size()[0]
         assert dim_size % tp_sp_cp_world_size == 0, "First dimension of the tensor should be divisible by tp*sp*cp parallel size"
         local_dim_size = dim_size // tp_sp_cp_world_size
@@ -275,7 +272,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(
     # Bypass the function if we are using only 1 GPU.
     # if world_size == 1:
     #     return input_
-    if args.sequence_parallel and split_tp_sp_cp_group is not None and split_tp_sp_cp_world_size > 1:
+    if args.train.sequence_parallel and split_tp_sp_cp_group is not None and split_tp_sp_cp_world_size > 1:
         dim_size = list(input_.size())
         dim_size[0] = dim_size[0] * split_tp_sp_cp_world_size
         output_ = torch.empty(dim_size, dtype=input_.dtype, device=torch.cuda.current_device())
@@ -291,7 +288,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(
         if new_cp_world_size > 1:
             output_ = _zigzag_transformation(output_, new_cp_world_size)
 
-    if args.shape_order == "SBH":  # [s, b, h] -> [b, s, h]
+    if args.model.shape_order == "SBH":  # [s, b, h] -> [b, s, h]
         output_ = rearrange(output_, "s b h -> b s h")
 
     if fused_split_group is not None or fused_allgather_group is not None:
@@ -323,12 +320,12 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(
             # print("end!",torch.cuda.current_device())
     else:
         output = output_
-    if args.shape_order == "SBH":  # [b, s, h] -> [s, b, h]
+    if args.model.shape_order == "SBH":  # [b, s, h] -> [s, b, h]
         output = rearrange(output, "b s h -> s b h")
     # else:
     #     if args.sequence_parallel:
     #         output = rearrange(output, "b s h -> (b s) h")
-    if args.sequence_parallel:
+    if args.train.sequence_parallel:
         dim_size = output.size()[0]
         tp_sp_cp_world_size = 1 if allgather_tp_sp_cp_group is None else torch.distributed.get_world_size(group=allgather_tp_sp_cp_group)
         assert dim_size % tp_sp_cp_world_size == 0, "First dimension of the tensor should be divisible by tp*sp*cp parallel size"
