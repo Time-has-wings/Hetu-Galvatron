@@ -73,7 +73,7 @@ def test_convert_checkpoints_bert_mlm(checkpoint_dir):
         assert os.path.exists(file_path), f"File {filename} was not created"
         
         # Load and verify the contents of each file
-        params = torch.load(file_path)
+        params = torch.load(file_path, weights_only=False)
         
         if filename == 'bert_embeddings.pt':
             # Verify embedding layer parameters

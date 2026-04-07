@@ -13,6 +13,12 @@ Run: pytest test_triton_cross_entropy_kernels.py -v -s
 import pytest
 import torch
 import galvatron
+from galvatron.core.runtime.tensor_parallel.triton_cross_entropy import (
+    tiled_max_reduction,
+    tiled_cross_entropy_forward,
+    tiled_cross_entropy_backward,
+)
+from galvatron.core.runtime.transformer.fused_kernels import VocabParallelCrossEntropy
 
 
 # ============================================================================
@@ -120,8 +126,6 @@ def test_max_reduction(device, seq_len, batch_size, vocab_size, model_config):
     print(f"Config: S={seq_len}, B={batch_size}, V={vocab_size}, dtype={dtype}")
     print(f"{'='*80}")
     
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_max_reduction
-    
     logits = torch.randn(seq_len, batch_size, vocab_size, device=device, dtype=dtype)
     
     max_triton = tiled_max_reduction(logits, BLOCK_SIZE=1024)
@@ -142,9 +146,6 @@ def test_forward(device, seq_len, batch_size, vocab_size, model_config):
     print(f"Test: Forward [{model_config}]")
     print(f"Config: S={seq_len}, B={batch_size}, V={vocab_size}")
     print(f"{'='*80}")
-    
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_cross_entropy_forward
-    from megatron.core.tensor_parallel.cross_entropy import VocabParallelCrossEntropy
     
     logits = torch.randn(seq_len, batch_size, vocab_size, device=device, dtype=torch.bfloat16)
     target = torch.randint(0, vocab_size, (seq_len, batch_size), device=device, dtype=torch.long)
@@ -178,9 +179,6 @@ def test_backward(device, seq_len, batch_size, vocab_size, model_config):
     print(f"Test: Backward [{model_config}]")
     print(f"Config: S={seq_len}, B={batch_size}, V={vocab_size}")
     print(f"{'='*80}")
-    
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_cross_entropy_backward
-    from megatron.core.tensor_parallel.cross_entropy import VocabParallelCrossEntropy
     
     logits = torch.randn(seq_len, batch_size, vocab_size, device=device, dtype=torch.bfloat16)
     target = torch.randint(0, vocab_size, (seq_len, batch_size), device=device, dtype=torch.long)
@@ -227,8 +225,6 @@ def test_edge_cases_max(device, case_name, seq_len, batch_size, vocab_size):
     print(f"Test: Edge Case - {case_name} (S={seq_len}, B={batch_size}, V={vocab_size})")
     print(f"{'='*80}")
     
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_max_reduction
-    
     logits = torch.randn(seq_len, batch_size, vocab_size, device=device, dtype=torch.bfloat16)
     
     if case_name == "extreme_values":
@@ -253,8 +249,6 @@ def test_boundary_targets(device):
     print(f"Test: Boundary Targets (vocab=1000)")
     print(f"{'='*80}")
     
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_cross_entropy_forward
-    
     logits = torch.randn(10, 1, 1000, device=device, dtype=torch.bfloat16)
     target = torch.zeros(10, 1, device=device, dtype=torch.long)
     target[1, :] = 999
@@ -271,7 +265,6 @@ def test_boundary_targets(device):
     
     assert finite, "Predicted or sum_exp has non-finite values"
     assert positive, "Sum_exp has non-positive values"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

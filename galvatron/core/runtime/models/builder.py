@@ -32,6 +32,8 @@ from .arch import (
     ArchModelInfo,
 )
 
+from galvatron.core.runtime.checkpoint.llama_adapter import load_llama_module
+from galvatron.core.runtime.checkpoint.gpt_adapter import load_gpt_module
 
 @dataclass
 class BlockNames:
@@ -161,9 +163,10 @@ def build_model(args):
     """
     from galvatron.core.runtime.hybrid_parallel_model import construct_hybrid_parallel_model_api
 
-    arch_list = build_causal_lm_arch(args)
+    arch_list = build_causal_lm_arch(args, args.model.model_type)
     hp_configs, model_info = get_hybrid_parallel_configs(args)
     block_names = get_block_names(args)
+    load_module_func = load_gpt_module if args.model.model_size.startswith("gpt") else load_llama_module
 
     if args.local_rank == 0:
         print("Creating Model...")
@@ -176,7 +179,7 @@ def build_model(args):
         layernorm_name=["input_layernorm" ,"post_attention_layernorm", "norm"],
         tied_wte_attr_names=["embed_tokens", "lm_head"] if args.model.untie_embeddings_and_output_weights else None,
         block_names=block_names,
-
+        load_module_func=load_module_func,
     )
 
 
