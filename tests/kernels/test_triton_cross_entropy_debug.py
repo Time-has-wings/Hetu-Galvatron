@@ -16,19 +16,17 @@ Run: torchrun --nproc_per_node=4 test_triton_cross_entropy_debug.py
 import torch
 import torch.distributed as dist
 import galvatron
+from tests.utils.init_dist import init_dist_env
 
-from megatron.core.parallel_state import initialize_model_parallel, destroy_model_parallel
-from megatron.core.tensor_parallel.cross_entropy import vocab_parallel_cross_entropy
-from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
-from megatron.core.fusions.triton_fused_cross_entropy import triton_fused_vocab_parallel_cross_entropy
-
+from galvatron.core.runtime.transformer.fused_kernels import vocab_parallel_cross_entropy, fused_vocab_parallel_cross_entropy
+from galvatron.core.runtime.tensor_parallel.triton_cross_entropy import triton_fused_vocab_parallel_cross_entropy
 
 def non_fused_ce(logits, target, tp_group):
-    return vocab_parallel_cross_entropy(logits, target)
+    return vocab_parallel_cross_entropy(logits, target, tp_group)
 
 
 def jit_fused_ce(logits, target, tp_group):
-    return fused_vocab_parallel_cross_entropy(logits, target, half_entropy=False, tp_group=tp_group)
+    return fused_vocab_parallel_cross_entropy(logits, target, False, tp_group)
 
 
 def triton_fused_ce(logits, target, tp_group):
@@ -142,16 +140,12 @@ def compare_results(name1, name2, loss1, grad1, loss2, grad2, rank):
 
 def test_triton_cross_entropy():
     """Multi-GPU Tensor Parallel distributed test."""
-    dist.init_process_group(backend='nccl')
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    torch.cuda.set_device(rank)
+    rank, world_size = init_dist_env()
     device = torch.device("cuda", rank)
     
     print_rank0(rank, f"{'='*80}\nCross Entropy Precision Test (TP={world_size})\n{'='*80}")
     
     # Initialize Tensor Parallel
-    initialize_model_parallel(tensor_model_parallel_size=world_size, pipeline_model_parallel_size=1)
     tp_group = torch.distributed.new_group(range(world_size))
     dist.barrier()
     
@@ -223,7 +217,6 @@ def test_triton_cross_entropy():
     
     print_rank0(rank, f"\n{'='*80}\nTest Complete (TP={world_size})\n{'='*80}")
     
-    destroy_model_parallel()
     dist.destroy_process_group()
 
 

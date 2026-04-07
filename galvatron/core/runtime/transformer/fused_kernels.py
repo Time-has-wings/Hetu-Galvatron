@@ -501,3 +501,66 @@ def fused_vocab_parallel_cross_entropy(vocab_parallel_logits, target, half_entro
 
     """
     return _VocabParallelCrossEntropy.apply(vocab_parallel_logits, target, half_entropy, tp_group)
+
+
+# ── Non-fused reference implementation ────────────────────────────────────────
+
+class _VocabParallelCrossEntropyNonFused(torch.autograd.Function):
+    """Non-fused (two separate all-reduces) vocab-parallel CE.
+
+    Serves as a float32 reference baseline; outputs are compared against the
+    fused and Triton-fused variants in precision tests.
+    """
+
+    @staticmethod
+    def forward(ctx, vocab_parallel_logits, target, tp_group):
+        vocab_parallel_logits = vocab_parallel_logits.float()
+        logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
+        torch.distributed.all_reduce(logits_max, op=torch.distributed.ReduceOp.MAX, group=tp_group)
+
+        partition_vocab_size = vocab_parallel_logits.size(-1)
+        vocab_start_index, vocab_end_index = VocabUtility.vocab_range_from_per_partition_vocab_size(
+            partition_vocab_size, tp_group.rank(), tp_group.size()
+        )
+
+        (target_mask, masked_target_1d, predicted_logits, sum_exp_logits, exp_logits) = (
+            VocabParallelCrossEntropy.calculate_predicted_logits(
+                vocab_parallel_logits, target, logits_max, vocab_start_index, vocab_end_index
+            )
+        )
+
+        torch.distributed.all_reduce(predicted_logits, op=torch.distributed.ReduceOp.SUM, group=tp_group)
+        torch.distributed.all_reduce(sum_exp_logits, op=torch.distributed.ReduceOp.SUM, group=tp_group)
+
+        exp_logits, loss = VocabParallelCrossEntropy.calculate_cross_entropy_loss(
+            exp_logits, predicted_logits, sum_exp_logits
+        )
+
+        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        softmax, target_mask, masked_target_1d = ctx.saved_tensors
+        (grad_2d, arange_1d, softmax_update, grad_input) = (
+            VocabParallelCrossEntropy.prepare_gradient_calculation_operands(softmax, target_mask)
+        )
+        grad_input = VocabParallelCrossEntropy.calculate_gradients(
+            grad_2d, arange_1d, masked_target_1d, softmax_update, grad_input, grad_output
+        )
+        return grad_input, None, None
+
+
+def vocab_parallel_cross_entropy(vocab_parallel_logits, target, tp_group):
+    """Non-fused vocab-parallel cross entropy (fp32, two all-reduces).
+
+    Used as the reference baseline in precision tests.
+
+    Args:
+        vocab_parallel_logits: ``[S, B, V/TP]`` (any dtype, upcast to fp32 internally)
+        target: ``[S, B]`` int64
+        tp_group: tensor-parallel process group
+    Returns:
+        loss: ``[S, B]`` fp32
+    """
+    return _VocabParallelCrossEntropyNonFused.apply(vocab_parallel_logits, target, tp_group)

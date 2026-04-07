@@ -146,7 +146,7 @@ def _initialize_distributed(args):
             'backend': args.distributed_backend,
             'world_size': args.world_size,
             'rank': args.rank,
-            'device_id': device_id,
+            # 'device_id': device_id,  Hint: Must disable device_id to save memory and time when generating new communication groups.
             'timeout': timedelta(minutes=args.distributed_timeout_minutes),
         }
 

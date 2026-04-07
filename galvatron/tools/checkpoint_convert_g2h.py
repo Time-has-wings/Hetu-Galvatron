@@ -1,12 +1,12 @@
 import torch
 import os
 import argparse
-from collections import defaultdict
+import torch.distributed as dist
+import torch.nn.functional as F
 from transformers import LlamaForCausalLM, BertForMaskedLM
 from galvatron.models.llama_hf.meta_configs.config_utils import config_from_meta
-import torch.nn.functional as F
-from megatron.core.tensor_parallel.utils import VocabUtility
-import torch.distributed as dist
+from galvatron.core.runtime.tensor_parallel.utils import VocabUtility
+
 
 def convert_checkpoints_llama(input_checkpoint_path, output_dir, load_iteration, model_config):
     """Convert Galvatron checkpoint to HuggingFace format"""
