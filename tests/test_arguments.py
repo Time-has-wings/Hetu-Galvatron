@@ -98,11 +98,10 @@ def test_profiler_hardware_args_defaults():
     assert args.master_port == "$MASTER_PORT"
     assert args.node_rank == "$RANK"
     assert args.max_tp_size == 8
-    assert args.backend == "nccl"
-    assert args.start_mb == 16
-    assert args.end_mb == 512
-    assert args.scale == 2
-    assert args.avg_or_min_or_first == "first"
+    assert args.envs == []
+    assert args.max_pp_deg == 8
+    assert args.overlap_time_multiply == 4
+
 
 
 @pytest.mark.utils
