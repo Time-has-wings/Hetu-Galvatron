@@ -323,7 +323,31 @@ def strategy_list2config(strategy_list:List[LayerStrategy]):
         'tp_consecutive_flags': tp_consecutive_flags,
         'dp_types_enc': dp_types_enc,
         'use_sp': sp,
-        'checkpoint': checkpoint
+        'checkpoint': checkpoint,
+        'world_size': strategy_list[0].world_size
     }
 
     return config
+
+def config2strategy(config:dict, default_dp_type:str='zero2') -> List[LayerStrategy]:
+    def str2array(s):
+        return list(map(int, s.split(',')))
+
+    pp_deg = config['pp_deg']
+    tp_sizes_enc = str2array(config['tp_sizes_enc'])
+    dp_types_enc = str2array(config['dp_types_enc'])
+    checkpoint = str2array(config['checkpoint'])
+    world_size = config['world_size']
+    use_sp = str2array(config['use_sp'])
+
+    dp_sizes_enc = [world_size // pp_deg // tp_sizes_enc[i] for i in range(len(tp_sizes_enc))]
+
+    layer_strategy_list = []
+    for i in range(len(tp_sizes_enc)):
+        dp_size = dp_sizes_enc[i]
+        tp_size = tp_sizes_enc[i] if use_sp[i] == 0 else 1
+        sp_size = tp_sizes_enc[i] if use_sp[i] == 1 else 1
+        dp_type = DPType.DDP if dp_size == 1 else (DPType.ZERO3 if default_dp_type == 'zero2' and dp_types_enc[i] == 1 else DPType.ZERO2)
+        layer_strategy_list.append(LayerStrategy(pp_size=pp_deg, tp_size=tp_size, sp_size=sp_size, dp_size=dp_size, dp_type=dp_type, checkpoint=checkpoint[i]))
+
+    return layer_strategy_list

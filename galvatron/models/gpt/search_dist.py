@@ -29,5 +29,5 @@ if __name__ == '__main__':
         model_name=model_name(args)
     )
     
-    search_engine.initialize_search_engine()
+    search_engine.initialize_search_engine(show_all_strategy_list=True)
     search_engine.parallelism_optimization()

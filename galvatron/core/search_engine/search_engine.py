@@ -90,10 +90,11 @@ class GalvatronSearchEngine():
     
     # =============== Initializing Galvatron Search Engine ===============
     # Generating Strategies, Loading Profiled Memory & Time Config, Setting Memory & Time Cost Models
-    def initialize_search_engine(self):
+    def initialize_search_engine(self, show_all_strategy_list=False):
         self.generate_strategy_list()
         self.filter_strategy_list()
-        self.show_all_strategy_list()
+        if show_all_strategy_list:
+            self.show_all_strategy_list()
 
         self.get_profiled_model_configs()
         self.get_profiled_hardware_configs()

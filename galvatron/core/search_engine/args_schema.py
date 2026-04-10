@@ -63,12 +63,12 @@ class SearchEngineDebugArgs(BaseModel):
 
 
 class GalvatronSearchArgs(BaseModel):
-    model_info:GalvatronModelArgs = Field(default=None, description="Model information.")
-    parallelism_info:GalvatronParallelArgs = Field(default=None, description="Parallelism information.")
-    common_train_info:CommonTrainArgs = Field(default=None, description="Common training information.")
-    hardware_info:SearchEngineHardwareInfoArgs = Field(default=None, description="Hardware information.")
-    batch_size_info:SearchEngineBatchSizeArgs = Field(default=None, description="Batch size information.")
+    model_info:GalvatronModelArgs = Field(default=GalvatronModelArgs(), description="Model information.")
+    parallelism_info:GalvatronParallelArgs = Field(default=GalvatronParallelArgs(), description="Parallelism information.")
+    common_train_info:CommonTrainArgs = Field(default=CommonTrainArgs(), description="Common training information.")
+    hardware_info:SearchEngineHardwareInfoArgs = Field(default=SearchEngineHardwareInfoArgs(), description="Hardware information.")
+    batch_size_info:SearchEngineBatchSizeArgs = Field(default=SearchEngineBatchSizeArgs(), description="Batch size information.")
     search_space_info:SearchEngineSearchSpaceArgs = Field(default=SearchEngineSearchSpaceArgs(), description="Search space information.")
-    profiling_info:SearchEngineProfilingArgs = Field(default=None, description="Profiling information.")
+    profiling_info:SearchEngineProfilingArgs = Field(default=SearchEngineProfilingArgs(), description="Profiling information.")
     options_info:SearchEngineOptionsArgs = Field(default=SearchEngineOptionsArgs(), description="Options information.")
     debug_info:SearchEngineDebugArgs = Field(default=SearchEngineDebugArgs(), description="Debug information.")
