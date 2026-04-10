@@ -288,7 +288,7 @@ class TopKRouter(Router):
             sequence_partition_group = parallel_state.get_vocab_cp_comm_group().group
             moe_aux_loss_coeff /= parallel_state.get_vocab_tp_sp_cp_world_size()
         elif parallel_state.get_vocab_tp_sp_cp_world_size() > 1:
-            sequence_partition_group = parallel_state.get_vocab_tp_sp_cp_comm_group().group
+            sequence_partition_group = parallel_state.get_vocab_tp_sp_cp_group()
 
         aux_loss = load_balancing_loss_func(
             moe_aux_loss_coeff=moe_aux_loss_coeff, sequence_partition_group=sequence_partition_group

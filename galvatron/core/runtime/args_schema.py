@@ -246,6 +246,7 @@ class CommonTrainArgs(BaseModel):
     override_opt_param_scheduler: bool = Field(default=False, description="Whether to override optimizer param scheduler values with class values.")
 
     sequence_parallel: bool = Field(default=True, description="Whether to use sequence parallel.")
+    global_memory_buffer: bool = Field(default=True, description="Whether to use global memory buffer.")
     use_flash_attn: bool = Field(default=True, description="Use FlashAttention implementation of attention.")
 
     global_batch_size: Optional[int] = Field(default=None, ge=1, description="Global training batch size.")

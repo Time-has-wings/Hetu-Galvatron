@@ -19,8 +19,11 @@ else
   additional_args="--rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT}"
 fi
 
+log_dir="logs/runtime"
+mkdir -p $log_dir
+
 torchrun \
   --nnodes=$NNODES \
   --nproc-per-node=$NPROC_PER_NODE \
   --node-rank=$NODE_RANK \
-  $additional_args train_dist.py scripts/train_dist.yaml "$@" 2>&1 | tee log.txt
+  $additional_args train_dist.py scripts/train_dist.yaml "$@" 2>&1 | tee $log_dir/train_runtime.log

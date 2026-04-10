@@ -1,11 +1,23 @@
 # tests/conftest.py
+"""Pytest hooks and fixtures. Ensures vendored ``megatron`` under ``galvatron/site_package`` is importable."""
+import os
+import sys
+import json
+import socket
+import subprocess
+from pathlib import Path
+
 import pytest
 import torch
 import torch.distributed as dist
-import os, sys, json, subprocess
-from typing import Dict, Callable, Tuple    
+from typing import Dict, Callable, Tuple
 import tempfile
-from pathlib import Path
+
+
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
 
 @pytest.fixture
 def small_model_config():
@@ -35,8 +47,8 @@ def run_distributed():
         if torch.cuda.device_count() < world_size:
             pytest.skip(f"Need at least {world_size} GPUs, but got {torch.cuda.device_count()}")
         
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "34567"
+        os.environ["MASTER_ADDR"] = "127.0.0.1"
+        os.environ["MASTER_PORT"] = str(_pick_free_port())
         os.environ["WORLD_SIZE"] = str(world_size)
         
         processes = []

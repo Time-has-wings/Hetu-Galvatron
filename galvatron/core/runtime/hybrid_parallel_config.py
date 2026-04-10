@@ -60,6 +60,16 @@ def get_hybrid_parallel_configs_api(args:GalvatronRuntimeArgs):
             else [0] * len(tp_sizes_enc)
         )
         pp_divide = str2array(galvatron_config["pp_division"]) if "pp_division" in galvatron_config.keys() else None
+        ep_sizes_enc = (
+            str2array(galvatron_config["ep_sizes_enc"])
+            if "ep_sizes_enc" in galvatron_config
+            else [1] * len(tp_sizes_enc)
+        )
+        tp_of_ep_sizes_enc = (
+            str2array(galvatron_config["tp_of_ep_sizes_enc"])
+            if "tp_of_ep_sizes_enc" in galvatron_config
+            else [1] * len(tp_sizes_enc)
+        )
         if isinstance(parallel_args.galvatron_config_path, str):
             config_source = "Galvatron JSON config %s" % parallel_args.galvatron_config_path
         else:

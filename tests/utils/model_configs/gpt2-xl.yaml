@@ -1,0 +1,25 @@
+# GPT-2 XL (1.5B) model config for Galvatron
+# Based on: openai-community/gpt2-xl
+
+model_size: gpt2-xl
+hf_model_name_or_path: null
+
+hidden_size: 1600
+num_layers: 48
+num_attention_heads: 25
+num_query_groups: null
+ffn_hidden_size: 6400
+vocab_size: 50257
+
+normalization: LayerNorm
+norm_epsilon: 1.0e-5
+activation_func: torch.nn.functional.gelu
+gated_linear_unit: false
+
+position_embedding_type: learned_absolute
+apply_rope_fusion: false
+
+add_bias_linear: true
+add_qkv_bias: true
+untie_embeddings_and_output_weights: false
+make_vocab_size_divisible_by: 1

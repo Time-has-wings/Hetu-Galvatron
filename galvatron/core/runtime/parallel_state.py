@@ -285,6 +285,11 @@ def _set_vocab_tp_sp_cp_group():
     ranks = sorted(list(set(tp_sp_ranks + cp_ranks)))
     _GLOBAL_VOCAB_TP_SP_CP_GROUP = torch.distributed.new_group(ranks=ranks, backend='nccl')
 
+def get_vocab_tp_sp_cp_group():
+    global _GLOBAL_VOCAB_TP_SP_CP_GROUP
+    if _GLOBAL_VOCAB_TP_SP_CP_GROUP is None:
+        _set_vocab_tp_sp_cp_group()
+    return _GLOBAL_VOCAB_TP_SP_CP_GROUP
 
 def get_vocab_tp_sp_cp_world_size():
     global _GLOBAL_VOCAB_TP_SP_CP_GROUP

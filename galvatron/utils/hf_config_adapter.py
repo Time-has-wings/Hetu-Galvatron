@@ -22,15 +22,36 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Callable
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING, Callable
 from pydantic import ImportString
 import torch
-from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
+from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs, GalvatronModelArgs, CommonTrainArgs
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
 logger = logging.getLogger(__name__)
+
+# -----------------------------------------------------------------------------
+# helper functions
+# -----------------------------------------------------------------------------
+def _get_model_args(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> GalvatronModelArgs:
+    if type(args) == GalvatronRuntimeArgs:
+        return args.model
+    elif type(args) == GalvatronSearchArgs:
+        return args.model_info
+    else:
+        raise ValueError(f"Unsupported args type: {type(args)}")
+
+def _get_train_args(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> CommonTrainArgs:
+    if type(args) == GalvatronRuntimeArgs:
+        return args.train
+    elif type(args) == GalvatronSearchArgs:
+        return args.common_train_info
+    else:
+        raise ValueError(f"Unsupported args type: {type(args)}")
+
 
 # =========================================================================
 # HF attribute alias table
@@ -141,14 +162,14 @@ def _load_yaml_model_config(yaml_path: str) -> dict:
     return data or {}
 
 
-def _apply_yaml_to_model_args(args:GalvatronRuntimeArgs, yaml_data: dict):
+def _apply_yaml_to_model_args(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs], yaml_data: dict):
     """Apply non-null YAML values onto ``args.model.*``.
 
     Only overwrites fields that are still at their default (None) in args.model,
     unless the field is an architecture-type field (normalization, activation, etc.)
     which always gets written.
     """
-    m = args.model
+    m = _get_model_args(args)
 
     # Architecture fields that should always be written from YAML
     _always_write = {
@@ -172,14 +193,15 @@ def _apply_yaml_to_model_args(args:GalvatronRuntimeArgs, yaml_data: dict):
 # HF config → args.model.* population
 # =========================================================================
 
-def populate_model_args_from_hf(args) -> "PretrainedConfig":
+def populate_model_args_from_hf(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> "PretrainedConfig":
     """Load HF config from ``args.model.hf_model_name_or_path`` and populate ``args.model.*``.
 
     Returns the loaded ``PretrainedConfig``.
     """
     from transformers import AutoConfig
 
-    path = args.model.hf_model_name_or_path
+    m = _get_model_args(args)
+    path = m.hf_model_name_or_path
     if path is None:
         raise ValueError("args.model.hf_model_name_or_path must be set.")
     hf_config = AutoConfig.from_pretrained(path, trust_remote_code=True)
@@ -187,9 +209,9 @@ def populate_model_args_from_hf(args) -> "PretrainedConfig":
     return hf_config
 
 
-def _fill_model_args_from_hf(args, hf_config):
+def _fill_model_args_from_hf(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs], hf_config: "PretrainedConfig"):
     """Internal: populate ``args.model.*`` from an HF PretrainedConfig."""
-    m = args.model
+    m = _get_model_args(args)
 
     if m.hidden_size is None:
         m.hidden_size = get_hf_attr(hf_config, "hidden_size")
@@ -210,10 +232,15 @@ def _fill_model_args_from_hf(args, hf_config):
     if m.kv_channels is None and m.hidden_size and m.num_attention_heads:
         m.kv_channels = m.hidden_size // m.num_attention_heads
 
-    if hasattr(args, "train") and args.train.seq_length is None:
+    # if hasattr(args, "train") and args.train.seq_length is None:
+    #     seq = get_hf_attr(hf_config, "max_position_embeddings")
+    #     if seq is not None:
+    #         args.train.seq_length = seq
+    train = _get_train_args(args)
+    if train.seq_length is None:
         seq = get_hf_attr(hf_config, "max_position_embeddings")
         if seq is not None:
-            args.train.seq_length = seq
+            train.seq_length = seq
 
     # Architecture-detection: always auto-detect from HF
     m.normalization = _detect_normalization(hf_config)
@@ -255,7 +282,7 @@ def _fill_model_args_from_hf(args, hf_config):
 # Unified entry point
 # =========================================================================
 
-def resolve_model_config(args:GalvatronRuntimeArgs) -> Optional["PretrainedConfig"]:
+def resolve_model_config(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> Optional["PretrainedConfig"]:
     """One-call entry point: resolve model config from all sources.
 
     Priority (highest wins):
@@ -268,7 +295,7 @@ def resolve_model_config(args:GalvatronRuntimeArgs) -> Optional["PretrainedConfi
     otherwise ``None``.
     """
     hf_config = None
-    m = args.model
+    m = _get_model_args(args)
 
     # --- Step 1: Load YAML template (if specified) ---
     yaml_data = {}
@@ -303,7 +330,7 @@ def resolve_model_config(args:GalvatronRuntimeArgs) -> Optional["PretrainedConfi
 # Reconstruct HF config from args.model.*
 # =========================================================================
 
-def create_hf_config(args, hf_config_class=None) -> "PretrainedConfig":
+def create_hf_config(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs], hf_config_class=None) -> "PretrainedConfig":
     """Reconstruct an HF ``PretrainedConfig`` from ``args.model.*``.
 
     If ``hf_model_name_or_path`` is set, loads the base HF config and overrides.
@@ -311,7 +338,7 @@ def create_hf_config(args, hf_config_class=None) -> "PretrainedConfig":
     """
     from transformers import AutoConfig
 
-    m = args.model
+    m = _get_model_args(args)
     if m.hf_model_name_or_path is not None:
         hf_config = AutoConfig.from_pretrained(m.hf_model_name_or_path, trust_remote_code=True)
     elif hf_config_class is not None:
@@ -329,8 +356,10 @@ def create_hf_config(args, hf_config_class=None) -> "PretrainedConfig":
         set_hf_attr(hf_config, "ffn_hidden_size", m.ffn_hidden_size)
     if m.vocab_size is not None:
         set_hf_attr(hf_config, "vocab_size", m.vocab_size)
-    if hasattr(args, "train") and args.train.seq_length is not None:
-        set_hf_attr(hf_config, "max_position_embeddings", args.train.seq_length)
+    
+    train = _get_train_args(args)
+    if train.seq_length is not None:
+        set_hf_attr(hf_config, "max_position_embeddings", train.seq_length)
 
     hf_config.use_cache = False
     return hf_config
@@ -340,23 +369,26 @@ def create_hf_config(args, hf_config_class=None) -> "PretrainedConfig":
 # Convenience helpers
 # =========================================================================
 
-def model_name(args) -> str:
+def model_name(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> str:
     """Return a human-readable model identifier from ``args.model``."""
-    name = args.model.model_size or args.model.hf_model_name_or_path or "unknown"
+    m = _get_model_args(args)
+    name = m.model_size or m.hf_model_name_or_path or "unknown"
     name = name.split("/")[-1]
-    if hasattr(args, "profile"):
-        if getattr(args.profile, "profile_mode", "sequence") != "sequence":
-            seq = args.train.seq_length or 0
-            return f"{name}_seqlen{seq}"
+    # if hasattr(args, "profile"):
+    #     if getattr(args.profile, "profile_mode", "sequence") != "sequence":
+    #         seq = args.train.seq_length or 0
+    #         return f"{name}_seqlen{seq}"
     return str(name)
 
 
-def model_layer_configs(args) -> List[Dict[str, Any]]:
+def model_layer_configs(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> List[Dict[str, Any]]:
     """Return layer metadata expected by the Galvatron planner."""
+    m = _get_model_args(args)
+    train = _get_train_args(args)
     return [
         {
-            "hidden_size": args.model.hidden_size,
-            "seq_len": args.train.seq_length,
-            "layer_num": args.model.num_layers,
+            "hidden_size": m.hidden_size,
+            "seq_len": train.seq_length,
+            "layer_num": m.num_layers,
         }
     ]

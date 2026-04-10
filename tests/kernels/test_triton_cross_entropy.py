@@ -12,6 +12,7 @@ Comparison: non_fused vs jit_fused, triton_fused vs non_fused, triton_fused vs j
 Run: pytest test_triton_cross_entropy.py -v -s
 """
 
+import os
 import sys
 import json
 import logging
@@ -19,6 +20,7 @@ import pytest
 import torch
 import torch.distributed as dist
 import galvatron
+from tests.utils.init_dist import init_dist_env
 
 # Configure logging
 logging.basicConfig(
@@ -27,10 +29,6 @@ logging.basicConfig(
     force=True
 )
 
-from megatron.core.parallel_state import initialize_model_parallel, destroy_model_parallel
-from megatron.core.tensor_parallel.cross_entropy import vocab_parallel_cross_entropy
-from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
-from megatron.core.fusions.triton_fused_cross_entropy import triton_fused_vocab_parallel_cross_entropy
 
 
 # ============================================================================
@@ -39,14 +37,17 @@ from megatron.core.fusions.triton_fused_cross_entropy import triton_fused_vocab_
 
 
 def non_fused_ce(logits, target, tp_group):
-    return vocab_parallel_cross_entropy(logits, target)
+    from galvatron.core.runtime.transformer.fused_kernels import vocab_parallel_cross_entropy
+    return vocab_parallel_cross_entropy(logits, target, tp_group)
 
 
 def jit_fused_ce(logits, target, tp_group):
-    return fused_vocab_parallel_cross_entropy(logits, target, half_entropy=False, tp_group=tp_group)
+    from galvatron.core.runtime.transformer.fused_kernels import fused_vocab_parallel_cross_entropy
+    return fused_vocab_parallel_cross_entropy(logits, target, False, tp_group)
 
 
 def triton_fused_ce(logits, target, tp_group):
+    from galvatron.core.runtime.tensor_parallel.triton_cross_entropy import triton_fused_vocab_parallel_cross_entropy
     return triton_fused_vocab_parallel_cross_entropy(logits, target, tp_group=tp_group)
 
 
@@ -161,11 +162,7 @@ def compare_results(name1, name2, loss1, grad1, loss2, grad2, rank):
 
 def _run_test(args):
     """Main test logic (runs in each distributed process)"""
-    # Initialize distributed environment
-    dist.init_process_group(backend='nccl')
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    torch.cuda.set_device(rank)
+    rank, world_size = init_dist_env()
     device = torch.device("cuda", rank)
     
     # Setup logging for this process
@@ -190,7 +187,6 @@ def _run_test(args):
     sys.stdout.flush()
     
     # Initialize Tensor Parallel
-    initialize_model_parallel(tensor_model_parallel_size=tp_size, pipeline_model_parallel_size=1)
     tp_group = torch.distributed.new_group(range(world_size))
     dist.barrier()
     
@@ -260,7 +256,6 @@ def _run_test(args):
     
     print_rank0(rank, f"\n{'='*80}\nTest Complete (TP={tp_size})\n{'='*80}")
     
-    destroy_model_parallel()
     dist.destroy_process_group()
 
 

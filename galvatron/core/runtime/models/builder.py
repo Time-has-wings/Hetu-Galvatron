@@ -34,6 +34,9 @@ from .arch import (
 from ..args_schema import GalvatronRuntimeArgs
 from .arch import BlockNames
 
+from galvatron.core.runtime.checkpoint.llama_adapter import load_llama_module
+from galvatron.core.runtime.checkpoint.gpt_adapter import load_gpt_module
+
 
 def build_sequential_from_arch(
     arch_list: List[str],
@@ -107,7 +110,6 @@ def build_sequential_from_arch(
 def build_causal_lm_arch(args:GalvatronRuntimeArgs) -> List[str]:
     """Build architecture list for a standard decoder-only causal LM."""
 
-    print(f'model_type is {args.model.model_type}')
     if args.model.model_type in ["gpt", "llama", "qwen"]:
         num_layers = args.model.num_layers
         return ["embedding"] + ["decoder"] * num_layers + ["prenorm", "lm_head"]
@@ -165,6 +167,7 @@ def build_model(args:GalvatronRuntimeArgs):
     hybrid_parallel_config = get_hybrid_parallel_configs_api(args)
     model_info = ArchModelInfo(arch_list, args)
     block_names = get_block_names(args)
+    load_module_func = load_gpt_module if args.model.model_size.startswith("gpt") else load_llama_module
 
     return construct_hybrid_parallel_model_api(
         arch_list=arch_list,
@@ -174,6 +177,7 @@ def build_model(args:GalvatronRuntimeArgs):
         layernorm_name=["input_layernorm" ,"post_attention_layernorm", "norm"],
         tied_wte_attr_names=["embed_tokens", "lm_head"] if args.model.untie_embeddings_and_output_weights else None,
         block_names=block_names,
+        load_module_func=load_module_func,
     )
 
 

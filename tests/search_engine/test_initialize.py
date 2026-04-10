@@ -14,7 +14,7 @@ from tests.utils.search_configs import (
 ])
 def test_set_cost_models(base_config_dirs, base_log_dirs, model_type, backend, time_mode, memory_mode, sp_enabled):
     """Test setting both time and memory cost models"""
-    search_engine = initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode, memory_mode, sp_enabled)
+    search_engine = initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode, memory_mode, sp_enabled, seqlen_list=[4096])
 
     # Verify time cost models
     assert hasattr(search_engine, 'model_args_list')

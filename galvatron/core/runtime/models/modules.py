@@ -13,7 +13,7 @@ from galvatron.core.runtime.tensor_parallel.mappings import (
     copy_to_tensor_model_parallel_region,
     gather_from_tensor_model_parallel_region,
 )
-from galvatron.core.runtime.tensor_parallel.utils import VocabUtility
+from galvatron.core.runtime.tensor_parallel.utils import VocabUtility, divide
 
 from galvatron.core.runtime.transformer.attention import SelfAttention, SelfAttentionSubmodules, AttnMaskType
 from galvatron.core.runtime.transformer.attention_impl import (
@@ -89,7 +89,16 @@ class GalvatronEmbedding(nn.Module):
 
         if self.has_position_embedding:
             if position_ids is None:
-                position_ids = torch.arange(input_ids.size(1), device=input_ids.device).unsqueeze(0)
+                # VocabParallelEmbedding with sequence_parallel transposes to [S, B, H];
+                # position ids must match that layout or (1,S,H) broadcasts to [S,S,H] and corrupts activations.
+                if self.embed_tokens.reduce_scatter_embeddings:
+                    s, b = hidden_states.shape[0], hidden_states.shape[1]
+                    position_ids = torch.arange(s, device=hidden_states.device).unsqueeze(1).expand(s, b)
+                else:
+                    s = input_ids.size(1)
+                    position_ids = torch.arange(s, device=input_ids.device).unsqueeze(0).expand(
+                        input_ids.size(0), s
+                    )
             hidden_states = hidden_states + self.embed_positions(position_ids)
 
         hidden_states = self.drop(hidden_states)
@@ -240,6 +249,7 @@ class GalvatronDecoderLayer(nn.Module):
 
     def __init__(self, args:GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
+        self.idx = layer_idx
         self.attn = GalvatronAttention(args, layer_idx, tp_group, sp_group, cp_group)
         self.ffn = GalvatronMLP(args, layer_idx, tp_group, sp_group, cp_group)
 
@@ -272,9 +282,17 @@ class GalvatronFinalNorm(nn.Module):
 class _LMHeadLinear(nn.Module):
     """TP-aware linear projection (for LM head)."""
 
-    def __init__(self, weight, sequence_parallel, tp_group):
+    def __init__(self, config, sequence_parallel, tp_group):
         super().__init__()
-        self.weight = nn.Parameter(weight.clone())
+        world_size = parallel_state.get_parallel_world_size(tp_group)
+        self.weight = nn.Parameter(
+            torch.empty(
+                divide(config.padded_vocab_size, world_size),
+                config.hidden_size,
+                device=torch.cuda.current_device(),
+                dtype=config.params_dtype,
+            )
+        )
         self.sequence_parallel = sequence_parallel
         self.tp_group = tp_group
         world_size = parallel_state.get_parallel_world_size(tp_group)
@@ -307,17 +325,7 @@ class GalvatronCausalLMHead(nn.Module):
         self.half_entropy = not args.parallel.entropy_in_fp32
         self.vocab_sp = args.parallel.vocab_sp
 
-        padded_vocab = m.padded_vocab_size
-        self.lm_head_proj = ColumnParallelLinear(
-            m.hidden_size,
-            padded_vocab,
-            config=m,
-            bias=False,
-            tp_group=self.tp_group,
-            sp_group=self.sp_group,
-            cp_group=self.cp_group,
-        )
-        self.lm_head = _LMHeadLinear(self.lm_head_proj.weight, self.sequence_parallel, self.tp_group)
+        self.lm_head = _LMHeadLinear(m, self.sequence_parallel, self.tp_group)
 
         if self.vocab_sp and sp_group is not None:
             cp_size = parallel_state.get_parallel_world_size(self.cp_group) if self.cp_group is not None else 1

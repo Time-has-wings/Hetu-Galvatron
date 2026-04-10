@@ -12,6 +12,12 @@ Run: python test_triton_cross_entropy_kernels_debug.py
 
 import torch
 import galvatron
+from galvatron.core.runtime.tensor_parallel.triton_cross_entropy import (
+    tiled_max_reduction,
+    tiled_cross_entropy_forward,
+    tiled_cross_entropy_backward,
+)
+from galvatron.core.runtime.transformer.fused_kernels import VocabParallelCrossEntropy
 
 
 def check_precision(triton_val, torch_val, name, rtol=1e-2, atol=1e-3):
@@ -35,8 +41,6 @@ def check_precision(triton_val, torch_val, name, rtol=1e-2, atol=1e-3):
 def test_max_reduction():
     """Test tiled_max_reduction precision."""
     print(f"\n{'='*80}\nTest 1: tiled_max_reduction\n{'='*80}")
-    
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_max_reduction
     
     device = torch.device("cuda:0")
     test_cases = [
@@ -65,9 +69,6 @@ def test_max_reduction():
 def test_forward():
     """Test tiled_cross_entropy_forward precision."""
     print(f"\n{'='*80}\nTest 2: tiled_cross_entropy_forward\n{'='*80}")
-    
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_cross_entropy_forward
-    from megatron.core.tensor_parallel.cross_entropy import VocabParallelCrossEntropy
     
     device = torch.device("cuda:0")
     test_cases = [(128, 4, 1000), (1024, 8, 12564), (2048, 16, 50257)]
@@ -104,9 +105,6 @@ def test_forward():
 def test_backward():
     """Test tiled_cross_entropy_backward precision."""
     print(f"\n{'='*80}\nTest 3: tiled_cross_entropy_backward\n{'='*80}")
-    
-    from megatron.core.fusions.triton_fused_cross_entropy import tiled_cross_entropy_backward
-    from megatron.core.tensor_parallel.cross_entropy import VocabParallelCrossEntropy
     
     device = torch.device("cuda:0")
     test_cases = [(128, 4, 1000), (1024, 8, 12564), (512, 16, 50257)]
@@ -155,10 +153,6 @@ def test_backward():
 def test_edge_cases():
     """Test edge cases."""
     print(f"\n{'='*80}\nTest 4: Edge Cases\n{'='*80}")
-    
-    from megatron.core.fusions.triton_fused_cross_entropy import (
-        tiled_max_reduction, tiled_cross_entropy_forward
-    )
     
     device = torch.device("cuda:0")
     
