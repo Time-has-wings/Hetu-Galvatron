@@ -10,10 +10,7 @@ import sys
 import torch
 
 from galvatron.core.arguments import load_with_hydra
-from galvatron.core import (
-    clip_grad_norm,
-    get_optimizer_and_param_scheduler,
-)
+from galvatron.core.runtime.optimizer.utils import clip_grad_norm, get_optimizer_and_param_scheduler
 from galvatron.core.runtime.models.builder import build_model, get_runtime_profiler
 from galvatron.core.runtime.dataloader import get_batch, get_train_valid_test_data_iterators
 from galvatron.core.runtime.utils.utils import set_megatron_args_for_dataset
@@ -33,13 +30,7 @@ def train(args):
     if local_rank == 0:
         print("Creating Dataset...")
 
-    set_megatron_args_for_dataset(
-        args,
-        model,
-        model.sp_groups_whole[0] if getattr(args.parallel, "vocab_sp", 0) else model.tp_groups_whole[0],
-        model.dp_groups_whole[0],
-        model.cp_groups_whole[0],
-    )
+    set_megatron_args_for_dataset(args)
 
     _print_args(args)
 

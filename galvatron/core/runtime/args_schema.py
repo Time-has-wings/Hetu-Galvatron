@@ -69,7 +69,6 @@ class GalvatronModelArgs(BaseModel):
             "If hf_model_name_or_path is also set in the file, auto-detection runs first."
         ),
     )
-    model_type: str = Field(default="gpt", description="Model type.")
     is_moe_model: bool = Field(default=False, description="Whether to use MoE.")
     set_experts_manually: int = Field(
         default=0,
@@ -88,7 +87,7 @@ class GalvatronModelArgs(BaseModel):
         description="Whether to set sequence length config manually (doesn't overwrite other model configs).",
     )
     initialize_on_meta: Literal[0, 1] = Field(default=1, description="Whether to initialize parameters on meta device.")
-    # TODO: remove shape order?
+    # TODO: remove shape order or add bhd?
     shape_order: Literal["SBH", "BSH"] = Field(default="SBH", description="Model shape order.")
     dropout_prob: float = Field(default=0.0, ge=0.0, le=1.0, description="Dropout rate.")
     print_loss: int = Field(default=0, description="Whether to check model correctness.")
@@ -153,6 +152,8 @@ class GalvatronModelArgs(BaseModel):
     moe_shared_expert_overlap: bool = Field(default=False, description="Overlap shared expert compute with dispatcher communications (requires alltoall dispatcher).")
     # --- Misc ---
     calculate_per_token_loss: bool = Field(default=False, description="Whether to scale aux loss by number of tokens (per-token loss mode).")
+    # --- MoE MLP ---
+    moe_grouped_gemm: bool = Field(default=False, description="Use grouped GEMM for MoE MLP.")
 
     # ===== Model parallel config =====
     params_dtype: torch.dtype = Field(default=torch.float32, description="Parameters dtype.")
@@ -168,6 +169,11 @@ class GalvatronModelArgs(BaseModel):
         default=0,
         description="Number of micro-batches for which weight gradient of vocab projection is deferred.",
     )
+
+    @property
+    def model_type(self):
+        prefix = self.model_size.split('-')[0]
+        return prefix.rstrip('0123456789.')
 
 class GalvatronProfileArgs(BaseModel):
     """Profiling and debugging."""

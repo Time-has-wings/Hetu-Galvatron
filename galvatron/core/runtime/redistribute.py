@@ -43,7 +43,7 @@ def _reverse_zigzag_transformation(input_, cp_world_size):
 def _split_along_first_dim_with_sequence_parallel(input_, split_cp_group, split_tp_sp_cp_group):
     """Split the tensor along its first dimension and keep the
     corresponding slice."""
-    from galvatron.core import get_args
+    from galvatron.core.runtime.parallel_state import get_args
 
     args = get_args()
 
@@ -84,7 +84,7 @@ def _split_along_first_dim_with_sequence_parallel(input_, split_cp_group, split_
 
 def _gather_along_first_dim_with_sequence_parallel(input_, allgather_cp_group, allgather_tp_sp_cp_group):
     """Gather tensors and concatinate along the first dimension."""
-    from galvatron.core import get_args
+    from galvatron.core.runtime.parallel_state import get_args
 
     args = get_args()
 
@@ -264,7 +264,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(
     fused_allgather_group, fused_split_group
 ):
     # TODO: Add support for split_cp_group != allgather_cp_group
-    from galvatron.core import get_args
+    from galvatron.core.runtime.parallel_state import get_args
 
     args = get_args()
 

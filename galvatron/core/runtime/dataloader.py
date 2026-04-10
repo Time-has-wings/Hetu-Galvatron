@@ -83,16 +83,16 @@ def build_pretraining_data_loader(dataset, consumed_samples):
             total_samples=len(dataset),
             consumed_samples=consumed_samples,
             micro_batch_size=args.micro_batch_size,
-            data_parallel_rank=parallel_state.get_vocab_data_parallel_rank(),
-            data_parallel_size=parallel_state.get_vocab_data_parallel_world_size())
+            data_parallel_rank=parallel_state.get_vocab_dp_rank(),
+            data_parallel_size=parallel_state.get_vocab_dp_world_size())
     elif args.dataloader_type == 'cyclic':
         batch_sampler = MegatronPretrainingRandomSampler(
             dataset,
             total_samples=len(dataset),
             consumed_samples=consumed_samples,
             micro_batch_size=args.micro_batch_size,
-            data_parallel_rank=parallel_state.get_vocab_data_parallel_rank(),
-            data_parallel_size=parallel_state.get_vocab_data_parallel_world_size(),
+            data_parallel_rank=parallel_state.get_vocab_dp_rank(),
+            data_parallel_size=parallel_state.get_vocab_dp_world_size(),
             data_sharding=args.data_sharding)
     elif args.dataloader_type == "external":
         # External dataloaders are passed through. User is expected to provide a
@@ -352,7 +352,7 @@ def build_train_valid_test_data_loaders(
     is_distributed = getattr(build_train_valid_test_datasets_provider, "is_distributed", False)
 
     # Construct the data pipeline
-    if is_distributed or parallel_state.get_vocab_tensor_parallel_rank() == 0:
+    if is_distributed or parallel_state.get_vocab_tp_sp_rank() == 0:
 
         # Build datasets.
         train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
@@ -445,7 +445,7 @@ def get_train_valid_test_data_iterators():
     def _is_dataset_built_on_rank():
         return (
             parallel_state.is_pipeline_first_stage() or parallel_state.is_pipeline_last_stage()
-        ) and parallel_state.get_vocab_tensor_parallel_rank() == 0
+        ) and parallel_state.get_vocab_tp_sp_rank() == 0
 
     def _datasets_provider(train_val_test_num_samples):
         args = get_args()
@@ -485,7 +485,7 @@ def get_train_valid_test_data_iterators():
 def get_batch(data_iterator):
     """Fetch a micro-batch and build the loss function closure."""
     args = get_args()
-    batch_size = args.train.global_batch_size // parallel_state.get_vocab_data_parallel_world_size()
+    batch_size = args.train.global_batch_size // parallel_state.get_vocab_dp_world_size()
 
     if (not parallel_state.is_pipeline_first_stage()) and (not parallel_state.is_pipeline_last_stage()):
         return torch.zeros([batch_size, 1], device="cuda"), {}, None

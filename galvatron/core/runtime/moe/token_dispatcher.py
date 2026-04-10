@@ -39,7 +39,13 @@ class MoETokenDispatcher:
     MoE Token Dispatcher
     """
 
-    def __init__(self, config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None) -> None:
+    def __init__(
+        self, 
+        config: GalvatronModelArgs, 
+        ep_group: dist.ProcessGroup = None, 
+        tp_of_ep_group: dist.ProcessGroup = None, 
+        tp_and_ep_group: dist.ProcessGroup = None
+    ) -> None:
         """
         Initialize the MoE Token Dispatcher.
         """
@@ -49,8 +55,8 @@ class MoETokenDispatcher:
         self.tp_of_ep_group = tp_of_ep_group
         self.tp_and_ep_group = tp_and_ep_group
 
-        self.tp_size = parallel_state.get_expert_tensor_parallel_world_size(tp_of_ep_group)
-        self.ep_size = parallel_state.get_expert_model_parallel_world_size(ep_group)
+        self.tp_size = parallel_state.get_parallel_world_size(self.tp_of_ep_group)
+        self.ep_size = parallel_state.get_parallel_world_size(self.ep_group)
 
     @property
     def ep_group(self):
@@ -65,7 +71,7 @@ class MoETokenDispatcher:
     @property
     def tp_rank(self):
         """Get expert tensor parallel rank."""
-        return parallel_state.get_expert_tensor_parallel_rank(self.tp_of_ep_group)
+        return parallel_state.get_parallel_rank(self.tp_of_ep_group)
 
     @property
     def tp_ep_group(self):
@@ -114,7 +120,14 @@ class MoEAllGatherTokenDispatcher(MoETokenDispatcher):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None
+        self, 
+        num_local_experts: int, 
+        local_expert_indices: List[int], 
+        config: GalvatronModelArgs, 
+        ep_group: dist.ProcessGroup = None,
+        tp_of_ep_group: dist.ProcessGroup = None, 
+        tp_and_ep_group: dist.ProcessGroup = None,
+        layer_idx:int = None,
     ) -> None:
         """
         Initialize the zero token dropping router.
@@ -131,6 +144,8 @@ class MoEAllGatherTokenDispatcher(MoETokenDispatcher):
         # each element is True if it's between the local_expert_indices. Only useful when cross
         # device token permutation is enabled and **AllGahter** is performed.
         self.global_local_map = None
+
+        self.layer_idx = layer_idx
 
     def token_permutation(
         self, hidden_states: torch.Tensor, probs: torch.Tensor, routing_map: torch.Tensor
@@ -280,8 +295,14 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None,
-        layer_number: int = None,
+        self,
+        num_local_experts: int, 
+        local_expert_indices: List[int], 
+        config: GalvatronModelArgs, 
+        ep_group: dist.ProcessGroup = None, 
+        tp_of_ep_group: dist.ProcessGroup = None, 
+        tp_and_ep_group: dist.ProcessGroup = None,
+        layer_idx: int = None,
     ) -> None:
         """
         Initialize the AlltoAll token dispatcher.
@@ -292,7 +313,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             config (GalvatronModelArgs): Configuration for the transformer model.
         """
         super().__init__(config=config, ep_group=ep_group, tp_of_ep_group=tp_of_ep_group, tp_and_ep_group=tp_and_ep_group)
-        self.layer_number = layer_number
+        self.layer_idx = layer_idx
         self.iter = 0
         self.num_local_experts = num_local_experts
         assert config.num_moe_experts is not None
@@ -435,7 +456,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             #     if torch.cuda.current_device() == 0:
             #         import os
             #         node_rank = os.getenv("ARNOLD_ID")
-            #         data_str = f"iter {self.iter}, layer {self.layer_number}, routing {num_global_tokens_per_expert.tolist()}\n"
+            #         data_str = f"iter {self.iter}, layer {self.layer_idx}, routing {num_global_tokens_per_expert.tolist()}\n"
             #         with open("result/router_log%s.log"%node_rank, "a") as f:
             #             f.write(data_str)
             #         self.iter += 1
@@ -924,7 +945,14 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
     """
 
     def __init__(
-        self, num_local_experts: int, local_expert_indices: List[int], config: GalvatronModelArgs, ep_group: dist.ProcessGroup = None, tp_of_ep_group: dist.ProcessGroup = None, tp_and_ep_group: dist.ProcessGroup = None
+        self, 
+        num_local_experts: int, 
+        local_expert_indices: List[int], 
+        config: GalvatronModelArgs, 
+        ep_group: dist.ProcessGroup = None, 
+        tp_of_ep_group: dist.ProcessGroup = None, 
+        tp_and_ep_group: dist.ProcessGroup = None,
+        layer_idx: int = None,
     ):
         super().__init__(config, ep_group, tp_of_ep_group, tp_and_ep_group)
 
@@ -946,6 +974,8 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
             num_local_experts=self.num_local_experts,
             router_dtype=self.config.moe_router_dtype,
         )
+
+        self.layer_idx = layer_idx
 
     def set_shared_experts(self, shared_experts):
         raise NotImplementedError(

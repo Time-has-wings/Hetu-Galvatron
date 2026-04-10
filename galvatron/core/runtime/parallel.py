@@ -60,7 +60,7 @@ def wrap_data_parallel(
         return module
     else:
         assert pp_device is not None
-        from galvatron.core import get_args
+        from galvatron.core.runtime.parallel_state import get_args
 
         fsdp_type_dict = {0: get_args().parallel.default_dp_type, 1: "zero3"}
         assert dp_type in fsdp_type_dict.keys()
@@ -121,7 +121,7 @@ def wrap_module_fsdp_manually(
         "zero2": ShardingStrategy.SHARD_GRAD_OP,
         "zero3": ShardingStrategy.FULL_SHARD,
     }[fsdp_type]
-    from galvatron.core import get_args
+    from galvatron.core.runtime.parallel_state import get_args
 
     args = get_args()
 
@@ -325,7 +325,7 @@ def wrap_modules_data_parallel(
     assert len(module_list) == len(dp_groups)
 
     process_group = default_process_group.group if default_process_group is not None else dp_groups[0].group
-    from galvatron.core import get_args
+    from galvatron.core.runtime.parallel_state import get_args
 
     args = get_args()
     pp_on = True if args.parallel.pp_deg > 1 else False

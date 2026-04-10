@@ -513,8 +513,8 @@ def scatter_to_sequence_parallel_region(input_, group):
 
 def gather_from_sequence_parallel_region(
     input_,
-    tensor_parallel_output_grad,
     group,
+    tensor_parallel_output_grad=True,
     output_split_sizes=None,
     use_global_buffer=False,
 ):

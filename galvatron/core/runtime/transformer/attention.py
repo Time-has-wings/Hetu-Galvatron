@@ -119,7 +119,7 @@ class Attention(torch.nn.Module, ABC):
         self,
         config: GalvatronModelArgs,
         submodules: Union[SelfAttentionSubmodules, CrossAttentionSubmodules],
-        layer_number: int,
+        layer_idx: int,
         attn_mask_type: AttnMaskType,
         attention_type: str,
         cp_comm_type: str = None,
@@ -133,7 +133,7 @@ class Attention(torch.nn.Module, ABC):
         args = get_args()
         self.args = args
         self.config = config
-        self.layer_number = layer_number
+        self.layer_idx = layer_idx
         self.attn_mask_type = attn_mask_type
         self.attention_type = attention_type
         self.use_flash_attn = args.train.use_flash_attn
@@ -293,7 +293,7 @@ class Attention(torch.nn.Module, ABC):
         # Pre-allocate memory for key-values for inference.
         # =================================================
         if inference_context.is_static_batching():
-            if self.layer_number not in inference_context.key_value_memory_dict:
+            if self.layer_idx not in inference_context.key_value_memory_dict:
                 inf_max_seq_length = inference_context.max_sequence_length
                 inf_max_batch_size = inference_context.max_batch_size
                 inference_key_memory = self._allocate_memory(
@@ -302,14 +302,14 @@ class Attention(torch.nn.Module, ABC):
                 inference_value_memory = self._allocate_memory(
                     inf_max_seq_length, inf_max_batch_size, self.val_hidden_size, value.dtype
                 )
-                inference_context.key_value_memory_dict[self.layer_number] = (
+                inference_context.key_value_memory_dict[self.layer_idx] = (
                     inference_key_memory,
                     inference_value_memory,
                 )
             else:
                 # Get the pre-allocated buffers for this layer
                 inference_key_memory, inference_value_memory = (
-                    inference_context.key_value_memory_dict[self.layer_number]
+                    inference_context.key_value_memory_dict[self.layer_idx]
                 )
 
         if not inference_context.is_static_batching() or inference_context.sequence_len_offset > 0:
@@ -381,10 +381,10 @@ class Attention(torch.nn.Module, ABC):
                 rotary_pos_emb = (q_pos_emb, None)  # key rotary emb has been applied
 
             # Append key/value data tensors to cache.
-            inference_context.append_key_value_cache(self.layer_number, key, value)
+            inference_context.append_key_value_cache(self.layer_idx, key, value)
 
             # Read key/value *pointer* tensors from cache.
-            key, value = inference_context.key_value_cache(self.layer_number)
+            key, value = inference_context.key_value_cache(self.layer_idx)
 
         return query, key, value, rotary_pos_emb, attn_mask_type
 
@@ -587,10 +587,10 @@ class Attention(torch.nn.Module, ABC):
             and not self.training
             and rotary_pos_cos is not None
         ):
-            assert self.layer_number in inference_context.key_value_memory_dict
+            assert self.layer_idx in inference_context.key_value_memory_dict
             assert inference_context.sequence_len_offset is not None
             inference_key_memory, inference_value_memory = inference_context.key_value_memory_dict[
-                self.layer_number
+                self.layer_idx
             ]
             output = self.flash_decode(
                 sequence_len_offset=sequence_len_offset,
@@ -744,7 +744,7 @@ class SelfAttention(Attention):
         self,
         config: GalvatronModelArgs,
         submodules: SelfAttentionSubmodules,
-        layer_number: int,
+        layer_idx: int,
         attn_mask_type=AttnMaskType.padding,
         cp_comm_type: str = None,
         tp_group: dist.ProcessGroup = None,
@@ -756,7 +756,7 @@ class SelfAttention(Attention):
         super().__init__(
             config=config,
             submodules=submodules,
-            layer_number=layer_number,
+            layer_idx=layer_idx,
             attn_mask_type=attn_mask_type,
             attention_type="self",
             cp_comm_type=cp_comm_type,
@@ -937,7 +937,7 @@ class CrossAttention(Attention):
         self,
         config: GalvatronModelArgs,
         submodules: CrossAttentionSubmodules,
-        layer_number: int,
+        layer_idx: int,
         attn_mask_type=AttnMaskType.padding,
         cp_comm_type: str = None,
         tp_group: dist.ProcessGroup = None,
@@ -947,7 +947,7 @@ class CrossAttention(Attention):
         super().__init__(
             config=config,
             submodules=submodules,
-            layer_number=layer_number,
+            layer_idx=layer_idx,
             attn_mask_type=attn_mask_type,
             attention_type="cross",
             cp_comm_type=cp_comm_type,
