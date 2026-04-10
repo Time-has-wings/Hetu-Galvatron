@@ -1,15 +1,41 @@
 import pytest
 from pathlib import Path
 from typing import Tuple
+from types import SimpleNamespace
+import shutil
 from tests.utils.search_configs import (
     write_time_config,
     write_memory_config,
     write_hardware_config
 )
 from tests.utils.search_args import SearchArgs
-from tests.utils.model_utils import ModelFactory
 from tests.models.configs.get_config_json import ConfigFactory
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
+from galvatron.utils.hf_config_adapter import model_layer_configs, model_name
+
+
+def _build_hf_test_args(config_json, time_mode):
+    model_ns = SimpleNamespace(
+        model_size=config_json.get("model_size", "llama2-7b"),
+        hf_model_name_or_path=config_json.get("hf_model_name_or_path"),
+        hidden_size=config_json.get("hidden_size"),
+        num_layers=config_json.get("num_hidden_layers", config_json.get("num_layers")),
+        num_attention_heads=config_json.get("num_attention_heads"),
+        ffn_hidden_size=config_json.get("intermediate_size", config_json.get("ffn_hidden_size")),
+        vocab_size=config_json.get("vocab_size"),
+    )
+    train_ns = SimpleNamespace(seq_length=config_json.get("seq_length", 4096))
+    profile_ns = SimpleNamespace(profile_mode=time_mode)
+    return SimpleNamespace(model=model_ns, train=train_ns, profile=profile_ns)
+
+
+def _promote_profile_filenames_to_all(configs_dir: Path, precision: str, model: str):
+    time_src = configs_dir / f"computation_profiling_{precision}_{model}.json"
+    time_dst = configs_dir / f"computation_profiling_{precision}_{model}_all.json"
+    mem_src = configs_dir / f"memory_profiling_{precision}_{model}.json"
+    mem_dst = configs_dir / f"memory_profiling_{precision}_{model}_all.json"
+    shutil.copyfile(time_src, time_dst)
+    shutil.copyfile(mem_src, mem_dst)
 
 # ============= Model Config Tests =============
 @pytest.mark.search_engine
@@ -32,11 +58,10 @@ def test_config_loading(base_config_dirs, model_type, backend, time_mode, memory
 
     # Setup search engine
     args = SearchArgs()
-    model_layer_configs, model_name = ModelFactory.get_meta_configs(model_type, backend)
     config_json = ConfigFactory.get_config_json(model_type)
     args.model_size = config_json
     args.local_rank = 0
-    config = ModelFactory.create_config(model_type, backend, args)
+    config = _build_hf_test_args(config_json, time_mode)
     
 
     args.time_profiling_path = str(configs_dir)
@@ -52,6 +77,7 @@ def test_config_loading(base_config_dirs, model_type, backend, time_mode, memory
     # Write both config files
     write_time_config(configs_dir, profile_mode=time_mode, model_name=model_name(config))
     write_memory_config(configs_dir, profile_mode=memory_mode, sp_mode=sp_enabled, model_name=model_name(config))
+    _promote_profile_filenames_to_all(configs_dir, args.mixed_precision, model_name(config))
     
     # Get configs and verify
     time_config, memory_config = search_engine.get_profiled_model_configs()
