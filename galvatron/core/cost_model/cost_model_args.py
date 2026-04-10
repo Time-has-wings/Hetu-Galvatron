@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable, Union
 import numpy as np
 
-
 @dataclass
 class ModelArgs:
     parameter_size: int = 48
@@ -20,9 +19,7 @@ class TrainArgs:
 @dataclass
 class ParallelArgs:
     use_zero2_for_dp: bool = False
-    disable_vtp: bool = False
     sequence_parallel: bool = False
-    sp_space:str = 'sp+tp'
     
     pipeline_type: str = 'gpipe'
     optimal_chunk_func: Optional[Callable] = None
@@ -47,3 +44,9 @@ class ProfileHardwareArgs:
     allreduce_dict: dict = field(default_factory=lambda: {})
     all2all_dict: dict = field(default_factory=lambda: {})
     costmodel_coe: float = 1.0
+
+    overlap_slowdown_coe: float = 1.0
+    allreduce_latency_per_MB_dict: dict = field(default_factory=lambda: {})
+    allreduce_message_size_to_latency_dict_dict: dict = field(default_factory=lambda: {})
+    allgather_message_size_to_latency_dict_dict: dict = field(default_factory=lambda: {})
+    all2all_message_size_to_latency_dict_dict: dict = field(default_factory=lambda: {})
