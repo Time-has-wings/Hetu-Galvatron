@@ -5,12 +5,7 @@ import argparse
 import torch
 from torch import nn
 
-def read_json_config(path):
-    return json.load(open(path,'r',encoding="utf-8"))
-
-def write_json_config(config, path):
-    with open(path,'w') as fp:
-        json.dump(config,fp, indent=4)
+from galvatron.utils import read_json_config, write_json_config
 
 def profile(args):
     torch.distributed.init_process_group(backend="nccl")

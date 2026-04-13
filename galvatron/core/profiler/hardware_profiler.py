@@ -57,60 +57,44 @@ class HardwareProfiler(BaseProfiler):
             "    --node_rank=$NODE_RANK"
         )
 
-        # Generate allreduce test script
-        def allreduce_script(allreduce_size: int, allreduce_consec: int) -> str:
-            log_name = (
-                f"logs/allreduce/allreduce_world_size{allreduce_size}_consec{allreduce_consec}"
-                "_profile_time0.log"
-            )
-            return (
-                f"{torchrun_prefix} \\\n"
-                "    profile_allreduce.py \\\n"
-                f"    --global_tp_deg {allreduce_size} \\\n"
-                f"    --global_tp_consec {allreduce_consec} \\\n"
-                "    --profile_time 0 \\\n"
-                f"    2>&1 | tee {log_name}\n"
-            )
+        # One torchrun: bandwidth sweep logic (halving tp, consec 1 then 0, skip full-world consec=0)
+        # lives in profile_allreduce.bandwidth_jobs_from_tp_degrees — same as legacy shell nested loops.
+        log_name = "logs/allreduce/allreduce_bandwidth_tp_time0.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_allreduce.py \\\n"
+            f"    --global_tp_deg {_shell_int_list(_halving_tp_degrees(world_size, world_size))} \\\n"
+            "    --profile_time 0 \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write allreduce test script
         config_dir = os.path.join(self.path, "./scripts")
         with open(os.path.join(config_dir, "profile_allreduce.sh"), "w") as f:
             f.write(env)
+            f.write(
+                "# Bandwidth sweep = legacy: while tp halves; each tp runs consec 1 then 0; "
+                "skip tp==world_size with consec 0. Implemented in profile_allreduce.bandwidth_jobs_from_tp_degrees.\n"
+                "# Omit --local_batch_size here: profile_allreduce.py defaults to 32 (still used for message size).\n"
+            )
             f.write("mkdir -p logs/allreduce\n")
-            allreduce_size = num_nodes * num_gpus_per_node
-            while allreduce_size > 1:
-                for allreduce_consec in [1, 0]:
-                    if world_size == allreduce_size and allreduce_consec == 0:
-                        continue
-                    script = allreduce_script(allreduce_size, allreduce_consec)
-                    f.write(f'echo "Running: {script}"\n')
-                    f.write(script)
-                allreduce_size //= 2
-                f.write("sleep 1\n")
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
         print("Generating p2p test script...")
 
-        # Generate p2p test script
-        def p2p_script(pp_deg: int) -> str:
-            log_name = f"logs/p2p/p2p_pp_deg{pp_deg}.log"
-            return (
-                f"{torchrun_prefix} \\\n"
-                "    profile_p2p.py \\\n"
-                f"    --pp_deg {pp_deg} \\\n"
-                f"    2>&1 | tee {log_name}\n"
-            )
+        log_name = "logs/p2p/p2p_pp.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_p2p.py \\\n"
+            f"    --pp_deg {_shell_int_list(_p2p_pp_deg_sweep(world_size, self.args.max_pp_deg))} \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write p2p test script
         with open(os.path.join(config_dir, "profile_p2p.sh"), "w") as f:
             f.write(env)
             f.write("mkdir -p logs/p2p\n")
-            pp_deg = 2
-            while pp_deg <= world_size and pp_deg <= self.args.max_pp_deg:
-                script = p2p_script(pp_deg)
-                f.write(f'echo "Running: {script}"\n')
-                f.write(script)
-                pp_deg *= 2
-                f.write("sleep 1\n")
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
     def generate_sp_script(self, num_nodes: int, num_gpus_per_node: int) -> None:
         """Generate test scripts for allreduce and all2all communication
@@ -132,68 +116,42 @@ class HardwareProfiler(BaseProfiler):
             "    --node_rank=$NODE_RANK"
         )
 
-        def allreduce_script(allreduce_size: int, allreduce_consec: int, buffer_size: int) -> str:
-            log_name = (
-                f"logs/allreduce_sp/allreduce_sp_world_size{allreduce_size}_consec{allreduce_consec}"
-                f"_local_batch_size{buffer_size}_profile_time1.log"
-            )
-            return (
-                f"{torchrun_prefix} \\\n"
-                "    profile_allreduce.py \\\n"
-                f"    --global_tp_deg {allreduce_size} \\\n"
-                f"    --global_tp_consec {allreduce_consec} \\\n"
-                f"    --local_batch_size {buffer_size} \\\n"
-                "    --profile_time 1 \\\n"
-                f"    2>&1 | tee {log_name}\n"
-            )
-
         args = self.args
         config_dir = os.path.join(self.path, "./scripts")
+        world_size = num_nodes * num_gpus_per_node
+        log_name = "logs/allreduce_sp/allreduce_sp_time1.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_allreduce.py \\\n"
+            f"    --global_tp_deg {_shell_int_list(_halving_tp_degrees(world_size, args.max_tp_size))} \\\n"
+            f"    --local_batch_size {_shell_int_list(_halving_batch_sizes(1024))} \\\n"
+            "    --profile_time 1 \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write allreduce test script with sequence parallelism
+        # Write allreduce test script with sequence parallelism (one torchrun)
         with open(os.path.join(config_dir, "profile_allreduce_sp.sh"), "w") as f:
             f.write(env)
             f.write("mkdir -p logs/allreduce_sp\n")
-            allreduce_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
-            while allreduce_size > 1:
-                buffer_size = 1024
-                while buffer_size >= 1:
-                    script = allreduce_script(allreduce_size, 1, buffer_size)
-                    f.write(f'echo "Running: {script}"\n')
-                    f.write(script)
-                    f.write("sleep 1\n")
-                    buffer_size //= 2
-                allreduce_size //= 2
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
         print("Generating all2all test script...")
 
-        def all2all_script(allreduce_size: int, buffer_size: int) -> str:
-            log_name = (
-                f"logs/all2all_sp/all2all_sp_world_size{allreduce_size}"
-                f"_local_batch_size{buffer_size}.log"
-            )
-            return (
-                f"{torchrun_prefix} \\\n"
-                "    profile_all2all.py \\\n"
-                f"    --global_tp_deg {allreduce_size} \\\n"
-                f"    --local_batch_size {buffer_size} \\\n"
-                f"    2>&1 | tee {log_name}\n"
-            )
+        log_name = "logs/all2all_sp/all2all_sp.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_all2all.py \\\n"
+            f"    --global_tp_deg {_shell_int_list(_halving_tp_degrees(world_size, args.max_tp_size))} \\\n"
+            f"    --local_batch_size {_shell_int_list(_halving_batch_sizes(1024))} \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write all-to-all test script
         with open(os.path.join(config_dir, "profile_all2all_sp.sh"), "w") as f:
             f.write(env)
             f.write("mkdir -p logs/all2all_sp\n")
-            all2all_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
-            while all2all_size > 1:
-                buffer_size = 1024
-                while buffer_size >= 1:
-                    script = all2all_script(all2all_size, buffer_size)
-                    f.write(f'echo "Running: {script}"\n')
-                    f.write(script)
-                    f.write("sleep 1\n")
-                    buffer_size //= 2
-                all2all_size //= 2
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
     def profile_bandwidth(self) -> None:
         """Generate allreduce/p2p profiling scripts."""
@@ -230,3 +188,42 @@ class HardwareProfiler(BaseProfiler):
         ARGS += "NUM_GPUS_PER_NODE=%d " % args.num_gpus_per_node
         ARGS += "OVERLAP_TIME_MULTIPLY=%d " % args.overlap_time_multiply
         os.system(ARGS + "sh %s" % (os.path.join(self.path, "scripts/profile_overlap.sh")))
+
+
+
+
+
+def _halving_tp_degrees(world_size: int, max_tp: int) -> list[int]:
+    """8,4,2,... down from min(world_size, max_tp), same order as legacy shell loops."""
+    out = []
+    s = min(world_size, max_tp)
+    while s > 1:
+        out.append(s)
+        s //= 2
+    return out
+
+
+def _halving_batch_sizes(start: int = 1024) -> list[int]:
+    """1024, 512, ... 1."""
+    out = []
+    b = start
+    while b >= 1:
+        out.append(b)
+        b //= 2
+    return out
+
+
+def _p2p_pp_deg_sweep(world_size: int, max_pp_deg: int) -> list[int]:
+    """2, 4, 8, ... up to world_size and max_pp_deg (same as legacy profile_p2p.sh loop)."""
+    out = []
+    pp_deg = 2
+    while pp_deg <= world_size and pp_deg <= max_pp_deg:
+        out.append(pp_deg)
+        pp_deg *= 2
+    return out
+
+
+def _shell_int_list(xs: list[int]) -> str:
+    """Space-separated ints for ``nargs='+'`` flags in generated shell, e.g. ``8 4 2``."""
+    return " ".join(str(x) for x in xs)
+

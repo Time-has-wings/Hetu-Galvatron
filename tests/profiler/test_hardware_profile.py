@@ -23,9 +23,10 @@ def _count_torchrun_blocks(scripts_dir: str, filename: str) -> int:
 @pytest.mark.parametrize(
     "num_nodes,num_gpus_per_node,expected_ar,expected_p2p,expected_ar_sp,expected_a2a_sp",
     [
-        (1, 4, 3, 2, 22, 22),
-        (1, 8, 5, 3, 33, 33),
-        (2, 8, 7, 3, 33, 33),
+        # allreduce / p2p / allreduce_sp / all2all_sp: one torchrun each where batched.
+        (1, 4, 1, 1, 1, 1),
+        (1, 8, 1, 1, 1, 1),
+        (2, 8, 1, 1, 1, 1),
     ],
 )
 def test_torch_hardware_profile(
