@@ -45,28 +45,82 @@ jobs:
           $BODY
           PROMPT_EOF
 
-      - name: AI triage
-        id: triage
+      # ── Plan A: GitHub Models (free, no API key needed) ──
+      - name: "AI triage (GitHub Models)"
+        id: triage_github
+        continue-on-error: true
         uses: actions/ai-inference@v1
         with:
           model: openai/gpt-4o-mini
           system-prompt-file: .github/prompts/issue-triage-system.txt
           prompt-file: /tmp/user_prompt.txt
-          temperature: 0.1
-          max-completion-tokens: 16384
+          max-tokens: 16384
 
+      # ── Plan B: Custom API (fallback) ──
+      - name: "AI triage (Custom API fallback)"
+        id: triage_custom
+        if: steps.triage_github.outcome == 'failure'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_ENDPOINT: ${{ secrets.LLM_ENDPOINT }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          SYSTEM_PROMPT=$(cat .github/prompts/issue-triage-system.txt)
+          USER_PROMPT=$(cat /tmp/user_prompt.txt)
+
+          ENDPOINT="${LLM_ENDPOINT:-https://api.openai.com/v1}"
+          MODEL="${LLM_MODEL:-gpt-4o-mini}"
+
+          RESPONSE=$(curl -s "${ENDPOINT}/chat/completions" \
+            -H "Authorization: Bearer ${LLM_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg model "$MODEL" \
+              --arg system "$SYSTEM_PROMPT" \
+              --arg user "$USER_PROMPT" \
+              '{
+                model: $model,
+                messages: [
+                  {role: "system", content: $system},
+                  {role: "user", content: $user}
+                ],
+                max_tokens: 4096
+              }')")
+
+          RESULT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+
+          if [ -z "$RESULT" ]; then
+            echo "Custom API also failed. Response: $RESPONSE"
+            exit 1
+          fi
+
+          echo "response<<RESPONSE_EOF" >> "$GITHUB_OUTPUT"
+          echo "$RESULT" >> "$GITHUB_OUTPUT"
+          echo "RESPONSE_EOF" >> "$GITHUB_OUTPUT"
+
+      # ── Pick whichever succeeded ──
       - name: Apply labels and comment
         uses: actions/github-script@v7
         env:
-          TRIAGE_RAW: ${{ steps.triage.outputs.response }}
+          TRIAGE_GITHUB: ${{ steps.triage_github.outputs.response }}
+          TRIAGE_CUSTOM: ${{ steps.triage_custom.outputs.response }}
+          GITHUB_OUTCOME: ${{ steps.triage_github.outcome }}
           ISSUE_NUM: ${{ steps.resolve.outputs.number }}
         with:
           script: |
+            const raw = process.env.GITHUB_OUTCOME === 'success'
+              ? process.env.TRIAGE_GITHUB
+              : process.env.TRIAGE_CUSTOM;
+
+            const source = process.env.GITHUB_OUTCOME === 'success'
+              ? 'GitHub Models'
+              : 'Custom API';
+
             let triage;
             try {
-              triage = JSON.parse(process.env.TRIAGE_RAW);
+              triage = JSON.parse(raw);
             } catch (e) {
-              console.log('Failed to parse AI response:', process.env.TRIAGE_RAW);
+              console.log(`Failed to parse AI response (${source}):`, raw);
               return;
             }
 
