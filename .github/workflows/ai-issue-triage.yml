@@ -3,6 +3,12 @@ name: AI Issue Triage
 on:
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to triage (for testing on existing issues)"
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -17,13 +23,28 @@ jobs:
         with:
           sparse-checkout: .github/prompts
 
-      - name: Prepare issue context
+      - name: Resolve issue number
+        id: resolve
         env:
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          printf '%s' "$ISSUE_TITLE" > /tmp/issue_title.txt
-          printf '%s' "$ISSUE_BODY"  > /tmp/issue_body.txt
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            NUM=${{ inputs.issue_number }}
+          else
+            NUM=${{ github.event.issue.number }}
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch issue content
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue view ${{ steps.resolve.outputs.number }} \
+            --json title,body \
+            --jq '.title' > /tmp/issue_title.txt
+          gh issue view ${{ steps.resolve.outputs.number }} \
+            --json title,body \
+            --jq '.body' > /tmp/issue_body.txt
 
       - name: AI triage
         id: triage
@@ -38,6 +59,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           TRIAGE_RAW: ${{ steps.triage.outputs.response }}
+          ISSUE_NUM: ${{ steps.resolve.outputs.number }}
         with:
           script: |
             let triage;
@@ -47,6 +69,8 @@ jobs:
               console.log('Failed to parse AI response:', process.env.TRIAGE_RAW);
               return;
             }
+
+            const issueNumber = parseInt(process.env.ISSUE_NUM, 10);
 
             const validLabels = [
               'bug', 'enhancement', 'installation', 'usage', 'performance',
@@ -58,7 +82,7 @@ jobs:
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
+                issue_number: issueNumber,
                 labels: labels
               });
             }
@@ -78,6 +102,6 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: issueNumber,
               body: body
             });
