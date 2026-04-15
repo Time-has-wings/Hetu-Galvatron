@@ -17,14 +17,22 @@ jobs:
         with:
           sparse-checkout: .github/prompts
 
+      - name: Prepare issue context
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          printf '%s' "$ISSUE_TITLE" > /tmp/issue_title.txt
+          printf '%s' "$ISSUE_BODY"  > /tmp/issue_body.txt
+
       - name: AI triage
         id: triage
         uses: actions/ai-inference@v1
         with:
           prompt-file: .github/prompts/issue-triage.prompt.yml
-          input: |
-            title: ${{ github.event.issue.title }}
-            body: ${{ github.event.issue.body }}
+          file_input: |
+            title: /tmp/issue_title.txt
+            body: /tmp/issue_body.txt
 
       - name: Apply labels and comment
         uses: actions/github-script@v7

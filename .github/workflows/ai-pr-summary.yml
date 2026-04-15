@@ -28,14 +28,19 @@ jobs:
           # Truncate to ~100KB to stay within model context limits
           head -c 100000 /tmp/pr_diff.txt > /tmp/pr_diff_truncated.txt
 
+      - name: Prepare PR context
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s' "$PR_TITLE" > /tmp/pr_title.txt
+
       - name: AI summary
         id: summary
         uses: actions/ai-inference@v1
         with:
           prompt-file: .github/prompts/pr-summary.prompt.yml
-          input: |
-            title: ${{ github.event.pull_request.title }}
           file_input: |
+            title: /tmp/pr_title.txt
             diff: /tmp/pr_diff_truncated.txt
 
       - name: Post or update summary comment
