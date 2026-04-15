@@ -23,7 +23,7 @@ jobs:
         with:
           sparse-checkout: .github/prompts
 
-      - name: Resolve issue number
+      - name: Resolve issue and build prompt
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -35,25 +35,25 @@ jobs:
           fi
           echo "number=$NUM" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch issue content
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh issue view ${{ steps.resolve.outputs.number }} \
-            --json title,body \
-            --jq '.title' > /tmp/issue_title.txt
-          gh issue view ${{ steps.resolve.outputs.number }} \
-            --json title,body \
-            --jq '.body' > /tmp/issue_body.txt
+          TITLE=$(gh issue view "$NUM" --json title --jq '.title')
+          BODY=$(gh issue view "$NUM" --json body --jq '.body')
+
+          cat > /tmp/user_prompt.txt <<PROMPT_EOF
+          Issue Title: $TITLE
+
+          Issue Body:
+          $BODY
+          PROMPT_EOF
 
       - name: AI triage
         id: triage
         uses: actions/ai-inference@v1
         with:
-          prompt-file: .github/prompts/issue-triage.prompt.yml
-          file_input: |
-            title: /tmp/issue_title.txt
-            body: /tmp/issue_body.txt
+          model: openai/gpt-4o-mini
+          system-prompt-file: .github/prompts/issue-triage-system.txt
+          prompt-file: /tmp/user_prompt.txt
+          temperature: 0.1
+          max-completion-tokens: 16384
 
       - name: Apply labels and comment
         uses: actions/github-script@v7
