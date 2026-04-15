@@ -1,0 +1,63 @@
+name: "New Model Support"
+description: "Request or propose support for a new model architecture"
+title: "[MODEL] "
+labels: ["model-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your interest in expanding Galvatron's model coverage!
+
+  - type: input
+    id: model-name
+    attributes:
+      label: Model Name
+      placeholder: "e.g. Llama-3, DeepSeek-V3, Mixtral"
+    validations:
+      required: true
+
+  - type: input
+    id: reference
+    attributes:
+      label: Paper / Reference
+      placeholder: "Link to paper or HuggingFace model page"
+    validations:
+      required: true
+
+  - type: textarea
+    id: architecture
+    attributes:
+      label: Architecture Summary
+      description: Brief description of the model's architecture and key components.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: status
+    attributes:
+      label: Current Status
+      options:
+        - label: "Model exists in HuggingFace Transformers"
+        - label: "Model has FlashAttention support"
+        - label: "Model requires custom Tensor Parallel implementation"
+        - label: "Model uses Mixture of Experts (MoE)"
+
+  - type: textarea
+    id: parallelism
+    attributes:
+      label: Parallelism Considerations
+      description: |
+        Specific requirements for parallel execution:
+        - Tensor Parallel implementation needs
+        - Pipeline Parallel split points
+        - Expert Parallel / MoE routing
+        - Sequence Parallel compatibility
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional Context
+    validations:
+      required: false

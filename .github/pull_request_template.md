@@ -1,29 +1,51 @@
----
-name: New Model Support Request
-about: Request support for a new model architecture in Galvatron
-title: '[MODEL] '
-labels: 'model-support'
-assignees: ''
----
+## Summary
 
-### Model Description
-- Model Name:
-- Paper/Reference:
-- Original Implementation:
+<!-- What does this PR do? Link related issues with "Fixes #123" or "Relates to #123". -->
 
-### Model Architecture
-Brief description of the model architecture and its key components.
+## Type of Change
 
-### Current Status
-- [ ] Model exists in Hugging Face Transformers
-- [ ] Model has Flash Attention implementation
-- [ ] Model requires custom tensor parallel implementation
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Performance improvement
+- [ ] Refactoring (no functional change)
+- [ ] Documentation
+- [ ] New model support
+- [ ] Profiling data contribution
+- [ ] CI / Build / Tooling
+- [ ] Other
 
-### Implementation Requirements
-List specific requirements or challenges for implementing this model in Galvatron:
-1. Tensor Parallel implementation needs
-2. Pipeline Parallel considerations
-3. Sequence Parallel compatibility
+## Component
 
-### Additional Context
-Any additional information that might be helpful for implementation.
+- [ ] Profiler (`galvatron/core/profiler/`)
+- [ ] Search Engine (`galvatron/core/search_engine/`)
+- [ ] Runtime — Pipeline Parallel (`galvatron/core/runtime/pipeline/`)
+- [ ] Runtime — Tensor Parallel (`galvatron/core/runtime/tensor_parallel/`)
+- [ ] Runtime — MoE (`galvatron/core/runtime/moe/`)
+- [ ] Runtime — Other (`galvatron/core/runtime/`)
+- [ ] Model — GPT (`galvatron/models/gpt/`)
+- [ ] Model — MoE (`galvatron/models/moe/`)
+- [ ] Docs (`docs/`)
+- [ ] Tests (`tests/`)
+- [ ] Other
+
+## Changes
+
+<!-- Bullet-point list of key changes. -->
+
+-
+
+## Testing
+
+<!-- How was this tested? Include commands, configs, or test names. -->
+
+- [ ] Existing tests pass (`pytest`)
+- [ ] New tests added
+- [ ] Manual testing (describe below)
+
+## Checklist
+
+- [ ] I have read the [Contributing Guide](../CONTRIBUTING.md)
+- [ ] Commit messages follow the convention: `[Module] type(scope): description`
+- [ ] Code is formatted and passes linting
+- [ ] Documentation updated (if applicable)
+- [ ] No breaking changes (or migration path documented)

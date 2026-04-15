@@ -1,0 +1,68 @@
+# Pull Request Labeler configuration
+# Used with actions/labeler to auto-label PRs based on changed file paths.
+# https://github.com/actions/labeler
+
+profiler:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/core/profiler/**"
+          - "galvatron/profile_hardware/**"
+
+search-engine:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/core/search_engine/**"
+
+runtime:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/core/runtime/**"
+
+runtime/pipeline:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/core/runtime/pipeline/**"
+
+runtime/tensor-parallel:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/core/runtime/tensor_parallel/**"
+
+runtime/moe:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/core/runtime/moe/**"
+
+model/gpt:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/models/gpt/**"
+
+model/moe:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "galvatron/models/moe/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "*.md"
+
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "setup.py"
+          - "Makefile"
+          - "csrc/**"
+          - "requirements.txt"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"

@@ -1,0 +1,75 @@
+name: "Performance Discussion"
+description: "Report a performance issue or discuss optimization opportunities"
+title: "[PERF] "
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to discuss training performance, throughput, memory usage, or communication overhead.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - "Throughput / Training speed"
+        - "Memory usage / OOM"
+        - "Communication overhead"
+        - "Search engine / Strategy quality"
+        - "Profiling accuracy"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the performance issue or optimization idea.
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup & Configuration
+      description: |
+        Include: model name, model size, parallelism strategy, batch size,
+        number of GPUs/nodes, YAML config, etc.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Observed Metrics
+      description: |
+        Include relevant numbers: throughput (samples/sec or TFLOPs),
+        memory usage (per GPU), communication time, etc.
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - Python version:
+        - PyTorch version:
+        - CUDA version:
+        - GPU model & count:
+        - Interconnect (NVLink/PCIe/InfiniBand):
+        - Galvatron version / commit:
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional Context
+    validations:
+      required: false

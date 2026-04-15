@@ -1,0 +1,63 @@
+name: "RFC (Request for Comments)"
+description: "Propose a significant design change or new system capability"
+title: "[RFC] "
+labels: ["rfc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RFCs are for proposing significant changes that need community discussion before implementation.
+        For small features, use the Feature Request template instead.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-paragraph summary of the proposal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this change needed? What problem does it solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Detailed Design
+      description: |
+        Explain the design in enough detail for someone familiar with Galvatron
+        to understand and implement it. Include API changes, data flow, and
+        how it interacts with existing components (profiler, search engine, runtime).
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact & Migration
+      description: |
+        - Breaking changes?
+        - Performance impact?
+        - Migration path for existing users?
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional Context
+      description: Related issues, papers, implementations in other systems, etc.
+    validations:
+      required: false

@@ -1,0 +1,75 @@
+name: AI Issue Triage
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/prompts
+
+      - name: AI triage
+        id: triage
+        uses: actions/ai-inference@v1
+        with:
+          prompt-file: .github/prompts/issue-triage.prompt.yml
+          input: |
+            title: ${{ github.event.issue.title }}
+            body: ${{ github.event.issue.body }}
+
+      - name: Apply labels and comment
+        uses: actions/github-script@v7
+        env:
+          TRIAGE_RAW: ${{ steps.triage.outputs.response }}
+        with:
+          script: |
+            let triage;
+            try {
+              triage = JSON.parse(process.env.TRIAGE_RAW);
+            } catch (e) {
+              console.log('Failed to parse AI response:', process.env.TRIAGE_RAW);
+              return;
+            }
+
+            const validLabels = [
+              'bug', 'enhancement', 'installation', 'usage', 'performance',
+              'model-support', 'rfc', 'documentation', 'good first issue', 'needs-info'
+            ];
+            const labels = (triage.labels || []).filter(l => validLabels.includes(l));
+
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labels
+              });
+            }
+
+            const body = [
+              '## AI Triage',
+              '',
+              `**Component**: ${triage.component}`,
+              `**Priority**: ${triage.priority}`,
+              `**Summary**: ${triage.summary}`,
+              '',
+              triage.needs_info
+                ? '> This issue needs more information. Please provide additional details so we can investigate.'
+                : ''
+            ].filter(Boolean).join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
