@@ -343,9 +343,9 @@ def set_sdp_whole_comm_group(whole_comm_group:List[CommGroup]):
 
 
 def get_tp_whole_comm_group():
-    global _GLOBAL_TP_SP_WHOLE_COMM_GROUP
-    _ensure_var_is_initialized(_GLOBAL_TP_SP_WHOLE_COMM_GROUP, 'tp_sp_whole_comm_group')
-    return _GLOBAL_TP_SP_WHOLE_COMM_GROUP
+    global _GLOBAL_TP_WHOLE_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_TP_WHOLE_COMM_GROUP, 'tp_whole_comm_group')
+    return _GLOBAL_TP_WHOLE_COMM_GROUP
 
 
 def get_sp_whole_comm_group():

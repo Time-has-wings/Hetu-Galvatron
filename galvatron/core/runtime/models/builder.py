@@ -36,6 +36,7 @@ from .arch import BlockNames
 
 from galvatron.core.runtime.checkpoint.llama_adapter import load_llama_module
 from galvatron.core.runtime.checkpoint.gpt_adapter import load_gpt_module
+from galvatron.core.runtime.checkpoint.moe_adapter import load_moe_module
 
 
 def build_sequential_from_arch(
@@ -167,7 +168,12 @@ def build_model(args:GalvatronRuntimeArgs):
     hybrid_parallel_config = get_hybrid_parallel_configs_api(args)
     model_info = ArchModelInfo(arch_list, args)
     block_names = get_block_names(args)
-    load_module_func = load_gpt_module if args.model.model_size.startswith("gpt") else load_llama_module
+    if args.model.model_type == "mistral":
+        load_module_func = load_moe_module
+    elif args.model.model_size.startswith("gpt"):
+        load_module_func = load_gpt_module
+    else:
+        load_module_func = load_llama_module
 
     return construct_hybrid_parallel_model_api(
         arch_list=arch_list,

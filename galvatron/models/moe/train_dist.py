@@ -15,6 +15,7 @@ from galvatron.core.runtime.models.builder import build_model, get_runtime_profi
 from galvatron.core.runtime.dataloader import get_batch, get_train_valid_test_data_iterators
 from galvatron.core.runtime.utils.utils import set_megatron_args_for_dataset
 from galvatron.core.runtime.initialize import initialize_galvatron, _print_args
+from galvatron.core.runtime.checkpoint.moe_adapter import save_moe_module
 from galvatron.utils.hf_config_adapter import resolve_model_config
 
 
@@ -64,6 +65,9 @@ def train(args):
 
         lr = optimizer.param_groups[0]["lr"]
         profiler.profile_time_end(iter_idx, loss, lr, grad_norm)
+
+        if args.ckpt.save is not None and args.ckpt.save_interval is not None and (iter_idx + 1) % args.ckpt.save_interval == 0:
+            save_moe_module(args.ckpt.save, model, optimizer, opt_param_scheduler, iter_idx + 1, args)
 
         torch.distributed.barrier()
 

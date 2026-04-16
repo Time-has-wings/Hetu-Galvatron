@@ -9,6 +9,7 @@ from galvatron.core.runtime.parallel_state import set_global_variables, set_glob
 from galvatron.core.runtime.utils.rerun_state_machine import initialize_rerun_state_machine
 from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
 from datetime import timedelta
+from galvatron.utils import set_seed
 
 @contextmanager
 def init_empty_weights(include_buffers: bool = True):
@@ -146,6 +147,7 @@ def initialize_galvatron(args:GalvatronRuntimeArgs):
     validate_args(args)
     set_global_variables(args)
     _initialize_distributed(args)
+    set_seed(args.train.seed)
     set_global_memory_buffer()
     initialize_rerun_state_machine()
 

@@ -16,7 +16,7 @@ from galvatron.core.runtime.dataloader import get_batch, get_train_valid_test_da
 from galvatron.core.runtime.utils.utils import set_megatron_args_for_dataset
 from galvatron.core.runtime.initialize import initialize_galvatron, _print_args
 from galvatron.utils.hf_config_adapter import resolve_model_config
-
+from galvatron.core.runtime.checkpoint.llama_adapter import save_llama_module
 
 def train(args):
     local_rank = args.local_rank
@@ -64,6 +64,9 @@ def train(args):
 
         lr = optimizer.param_groups[0]["lr"]
         profiler.profile_time_end(iter_idx, loss, lr, grad_norm)
+
+        if args.ckpt.save is not None and args.ckpt.save_interval is not None and (iter_idx + 1) % args.ckpt.save_interval == 0:
+            save_llama_module(args.ckpt.save, model, optimizer, opt_param_scheduler, iter_idx + 1, args)
 
         torch.distributed.barrier()
 

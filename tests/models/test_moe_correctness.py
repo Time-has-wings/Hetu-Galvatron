@@ -1,28 +1,58 @@
-"""Cross-stack model correctness: Galvatron runtime vs HuggingFace (DP, 8 ranks).
-
-Runtime ``args.model.model_type`` is always ``gpt`` (same stack). Param ``hf_arch``
-only picks the HF baseline / checkpoint layout: ``gpt`` (GPT-2), ``llama``, ``llama2`` (GQA).
-"""
+"""Cross-stack MoE correctness: Galvatron runtime vs HuggingFace Mixtral (DP only)."""
 
 import json
 import sys
 from typing import Any, Dict
 
-import pytest
+try:
+    import pytest
+except ImportError:  # pragma: no cover
+    class _PytestMarkStub:
+        def skipif(self, *args, **kwargs):
+            return None
+
+        def parametrize(self, *args, **kwargs):
+            def decorator(obj):
+                return obj
+            return decorator
+
+        def __getattr__(self, _name):
+            def decorator(obj):
+                return obj
+            return decorator
+
+    class _PytestStub:
+        mark = _PytestMarkStub()
+
+    pytest = _PytestStub()
+
 import torch
 from torch.amp import autocast
 from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
-from transformers import GPT2Config, GPT2LMHeadModel, LlamaConfig, LlamaForCausalLM
+
+try:
+    from transformers import MixtralConfig, MixtralForCausalLM
+except ImportError:  # pragma: no cover
+    MixtralConfig = None
+    MixtralForCausalLM = None
 
 from galvatron.core.runtime.datasets import RandomTokenDataset, random_collate_fn
 from galvatron.core.runtime.models.builder import build_model
 from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
-from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_gpt, convert_checkpoints_llama
+from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_mixtral
 from galvatron.utils.training_utils import distributed_dataloader, set_seed
 from tests.models.configs.get_config_json import ConfigFactory
 from tests.utils.init_dist import init_dist_env
 from tests.utils.runtime_args import make_test_args
+
+if hasattr(pytest.mark, "skipif"):
+    pytestmark = pytest.mark.skipif(
+        MixtralConfig is None or MixtralForCausalLM is None,
+        reason="Mixtral support is unavailable in the installed transformers package.",
+    )
+else:  # pragma: no cover
+    pytestmark = None
 
 
 def _dp_parallel_config(num_layers: int, batch: int, chunks: int) -> Dict[str, Any]:
@@ -43,6 +73,8 @@ def _dp_parallel_config(num_layers: int, batch: int, chunks: int) -> Dict[str, A
         "default_dp_type": "zero2",
         "vtp": 1,
         "vsp": 0,
+        "ep_sizes_enc": enc,
+        "tp_of_ep_sizes_enc": enc,
     }
 
 
@@ -50,9 +82,6 @@ def _run_test(test_args: Dict[str, Any]):
     rank, world_size = init_dist_env()
     dp_size = test_args["dp_size"]
     assert dp_size == world_size
-
-    hf_arch = test_args["hf_arch"]
-    assert hf_arch in ("gpt", "llama", "llama2")
 
     batch_size = test_args["batch_size"]
     chunks = test_args["chunks"]
@@ -65,97 +94,66 @@ def _run_test(test_args: Dict[str, Any]):
     device = torch.device("cuda", rank)
     set_seed(seed)
 
-    cfg = ConfigFactory.get_config_json(hf_arch)
+    cfg = ConfigFactory.get_config_json("mixtral")
+    n_layer = cfg["n_layers"]
+    n_heads = cfg["n_heads"]
+    n_kv = cfg["n_kv_heads"]
+    gqa = n_kv < n_heads
+    parallel_config = _dp_parallel_config(n_layer, batch_size, chunks)
 
-    if hf_arch == "gpt":
-        n_layer = cfg["n_layer"]
-        parallel_config = _dp_parallel_config(n_layer, batch_size, chunks)
-        args = make_test_args(
-            hf_arch="gpt",
-            rank=rank,
-            world_size=world_size,
-            checkpoint_load=checkpoint_dir["converted"],
-            mixed_precision="bf16",
-            async_grad_reduce=False,
-            galvatron_config_path=parallel_config,
-            global_batch_size=batch_size,
-            chunks=chunks,
-            seed=seed,
-            seq_length=cfg["n_positions"],
-            hidden_size=cfg["n_embd"],
-            num_layers=n_layer,
-            num_attention_heads=cfg["n_head"],
-            ffn_hidden_size=cfg["n_embd"] * 4,
-            vocab_size=cfg["vocab_size"],
+    hf_config = MixtralConfig(
+        hidden_size=cfg["dim"],
+        intermediate_size=cfg["hidden_dim"],
+        num_hidden_layers=n_layer,
+        num_attention_heads=n_heads,
+        num_key_value_heads=n_kv,
+        num_local_experts=cfg["num_local_experts"],
+        num_experts_per_tok=cfg["num_experts_per_tok"],
+        vocab_size=cfg["vocab_size"],
+        max_position_embeddings=cfg["n_positions"],
+        rms_norm_eps=cfg["norm_eps"],
+        hidden_act="silu",
+        attention_dropout=0.0,
+    )
+
+    args = make_test_args(
+        hf_arch="mixtral",
+        rank=rank,
+        world_size=world_size,
+        checkpoint_load=checkpoint_dir["converted"],
+        mixed_precision="bf16",
+        async_grad_reduce=False,
+        galvatron_config_path=parallel_config,
+        global_batch_size=batch_size,
+        chunks=chunks,
+        seed=seed,
+        seq_length=cfg["n_positions"],
+        hidden_size=cfg["dim"],
+        num_layers=n_layer,
+        num_attention_heads=n_heads,
+        ffn_hidden_size=cfg["hidden_dim"],
+        vocab_size=cfg["vocab_size"],
+        group_query_attention=gqa,
+        num_query_groups=n_kv if gqa else None,
+        norm_epsilon=cfg["norm_eps"],
+        num_moe_experts=cfg["num_local_experts"],
+        moe_ffn_hidden_size=cfg["hidden_dim"],
+        moe_router_topk=cfg["num_experts_per_tok"],
+        moe_router_load_balancing_type="none",
+        moe_router_score_function="softmax",
+        moe_permute_fusion=False,
+    )
+
+    if rank == last:
+        baseline_model = MixtralForCausalLM(hf_config)
+        baseline_optimizer = Adam(
+            baseline_model.parameters(),
+            lr=args.train.lr,
+            weight_decay=args.train.weight_decay,
         )
-        hf_config = GPT2Config(
-            n_embd=args.model.hidden_size,
-            n_layer=args.model.num_layers,
-            n_head=args.model.num_attention_heads,
-            n_positions=args.train.seq_length,
-            n_inner=args.model.ffn_hidden_size,
-            vocab_size=args.model.vocab_size,
-            resid_pdrop=0.0,
-            embd_pdrop=0.0,
-            attn_pdrop=0.0,
-        )
-        if rank == last:
-            baseline_model = GPT2LMHeadModel(hf_config)
-            baseline_optimizer = Adam(
-                baseline_model.parameters(),
-                lr=args.train.lr,
-                weight_decay=args.train.weight_decay,
-            )
-            baseline_model.save_pretrained(checkpoint_dir["baseline"])
-            convert_checkpoints_gpt(checkpoint_dir["baseline"], checkpoint_dir["converted"])
-            baseline_model = baseline_model.to(device)
-    else:
-        n_layer = cfg["n_layers"]
-        n_heads = cfg["n_heads"]
-        n_kv = cfg.get("n_kv_heads", n_heads)
-        gqa = n_kv < n_heads
-        parallel_config = _dp_parallel_config(n_layer, batch_size, chunks)
-        hf_config = LlamaConfig(
-            hidden_size=cfg["dim"],
-            num_hidden_layers=n_layer,
-            num_attention_heads=n_heads,
-            num_key_value_heads=n_kv,
-            intermediate_size=cfg["dim"] * 4,
-            vocab_size=cfg["vocab_size"],
-            max_position_embeddings=cfg["n_positions"],
-            rms_norm_eps=cfg["norm_eps"],
-        )
-        args = make_test_args(
-            hf_arch=hf_arch,
-            rank=rank,
-            world_size=world_size,
-            checkpoint_load=checkpoint_dir["converted"],
-            mixed_precision="bf16",
-            async_grad_reduce=False,
-            galvatron_config_path=parallel_config,
-            global_batch_size=batch_size,
-            chunks=chunks,
-            seed=seed,
-            seq_length=cfg["n_positions"],
-            hidden_size=cfg["dim"],
-            num_layers=n_layer,
-            num_attention_heads=n_heads,
-            ffn_hidden_size=hf_config.intermediate_size,
-            vocab_size=cfg["vocab_size"],
-            group_query_attention=gqa,
-            num_query_groups=n_kv if gqa else None,
-            norm_epsilon=cfg["norm_eps"],
-        )
-        if rank == last:
-            baseline_model = LlamaForCausalLM(hf_config)
-            baseline_optimizer = Adam(
-                baseline_model.parameters(),
-                lr=args.train.lr,
-                weight_decay=args.train.weight_decay,
-            )
-            baseline_model.save_pretrained(checkpoint_dir["baseline"])
-            convert_checkpoints_llama(checkpoint_dir["baseline"], checkpoint_dir["converted"])
-            baseline_model = baseline_model.to(device)
+        baseline_model.save_pretrained(checkpoint_dir["baseline"])
+        convert_checkpoints_mixtral(checkpoint_dir["baseline"], checkpoint_dir["converted"])
+        baseline_model = baseline_model.to(device)
 
     set_args(args)
     set_global_memory_buffer()
@@ -224,20 +222,16 @@ def _run_test(test_args: Dict[str, Any]):
 
 @pytest.mark.distributed
 @pytest.mark.model
-@pytest.mark.parametrize("hf_arch", ["gpt", "llama", "llama2"])
-@pytest.mark.parametrize("backend", ["hf"])
-@pytest.mark.parametrize("dp_size", [8])
-def test_dp_correctness(run_distributed, hf_arch, backend, dp_size, checkpoint_dir):
+@pytest.mark.parametrize("dp_size", [2])
+def test_dp_correctness(run_distributed, dp_size, checkpoint_dir):
     run_distributed(
         func_name="_run_test",
         world_size=dp_size,
         args={
-            "hf_arch": hf_arch,
-            "backend": backend,
             "dp_size": dp_size,
-            "batch_size": 16,
+            "batch_size": 8,
             "chunks": 2,
-            "num_steps": 3,
+            "num_steps": 2,
             "seed": 42,
             "checkpoint_dir": checkpoint_dir,
         },

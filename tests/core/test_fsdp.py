@@ -10,7 +10,7 @@ from torch.nn import CrossEntropyLoss
 
 from tests.utils.init_dist import init_dist_env
 from tests.utils.runtime_args import make_test_args
-from galvatron.core.runtime.parallel_state import set_args, _set_global_memory_buffer
+from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
 from galvatron.core.runtime.models.builder import build_model
 from galvatron.core.runtime.datasets import RandomTokenDataset, random_collate_fn
 from galvatron.utils.training_utils import set_seed, distributed_dataloader
@@ -48,7 +48,7 @@ def _run_test(test_args: Dict[str, Any]):
         seed=seed,
     )
     set_args(args)
-    _set_global_memory_buffer()
+    set_global_memory_buffer()
 
     hf_config = GPT2Config(
         n_embd=args.model.hidden_size,

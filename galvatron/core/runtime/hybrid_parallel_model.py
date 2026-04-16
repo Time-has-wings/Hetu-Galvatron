@@ -288,5 +288,15 @@ def construct_hybrid_parallel_model_api(
     )
 
     model = GalvatronModel(hp_model)
+    model.dp_groups_whole = dp_groups_whole
+    model.tp_groups_whole = tp_groups_whole
+    model.sp_groups_whole = sp_groups_whole
+    model.cp_groups_whole = cp_groups_whole
+    model.sdp_groups_whole = seq_data_groups_whole
+    model.ep_groups_whole = ep_groups_whole
+    model.tp_of_ep_groups_whole = tp_of_ep_groups_whole
+    model.tp_and_ep_groups_whole = tp_and_ep_groups_whole
+    model.dp_of_ep_groups_whole = dp_of_ep_groups_whole
+    model.hybrid_parallel_configs = hybrid_parallel_configs
 
     return model
