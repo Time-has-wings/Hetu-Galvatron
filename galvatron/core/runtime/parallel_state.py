@@ -1,16 +1,40 @@
 import os
+from typing import List
+
 from galvatron.core.runtime.utils.utils import GlobalMemoryBuffer
 from galvatron.core.runtime.datasets.megatron.tokenizer import build_tokenizer
 import torch
 import torch.distributed
-from datetime import timedelta
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
+from galvatron.core.runtime.comm_groups import CommGroup
 
-_GLOBAL_MEMORY_BUFFER = None
+# --- Helper Functions ---
+def _ensure_var_is_initialized(var, name):
+    """Make sure the input variable is not None."""
+    assert var is not None, '{} is not initialized.'.format(name)
 
-def _set_global_memory_buffer():
+
+def _ensure_var_is_not_initialized(var, name):
+    """Make sure the input variable is not None."""
+    assert var is None, '{} is already initialized.'.format(name)
+
+
+# --- Parallel World Size and Rank ---
+def get_parallel_world_size(group:torch.distributed.ProcessGroup):
+    return torch.distributed.get_world_size(group=group)
+
+
+def get_parallel_rank(group:torch.distributed.ProcessGroup):
+    return torch.distributed.get_rank(group=group)
+
+
+# --- Global Memory Buffer ---
+_GLOBAL_MEMORY_BUFFER:GlobalMemoryBuffer = None
+
+def set_global_memory_buffer():
     """Initialize global buffer."""
     global _GLOBAL_MEMORY_BUFFER
-    assert _GLOBAL_MEMORY_BUFFER is None, 'global memory buffer is already initialized'
+    _ensure_var_is_not_initialized(_GLOBAL_MEMORY_BUFFER, 'global memory buffer')
     _GLOBAL_MEMORY_BUFFER = GlobalMemoryBuffer()
 
 
@@ -25,10 +49,14 @@ def destroy_global_memory_buffer():
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
 
-_GLOBAL_ARGS = None
-_GLOBAL_TOKENIZER = None
-_GLOBAL_TENSORBOARD_WRITER = None
-_GLOBAL_WANDB_WRITER = None
+
+# --- Global Args ---
+_GLOBAL_ARGS:GalvatronRuntimeArgs = None
+
+def set_args(args:GalvatronRuntimeArgs):
+    global _GLOBAL_ARGS
+    _ensure_var_is_not_initialized(_GLOBAL_ARGS, 'args')
+    _GLOBAL_ARGS = args
 
 
 def get_args():
@@ -37,18 +65,10 @@ def get_args():
     return _GLOBAL_ARGS
 
 
-def get_tokenizer():
-    """Return tokenizer."""
-    _ensure_var_is_initialized(_GLOBAL_TOKENIZER, 'tokenizer')
-    return _GLOBAL_TOKENIZER
+# --- Global Tokenizer ---
+_GLOBAL_TOKENIZER = None
 
-
-def set_args(args):
-    global _GLOBAL_ARGS
-    _GLOBAL_ARGS = args
-
-
-def _build_tokenizer(args):
+def _build_tokenizer(args:GalvatronRuntimeArgs):
     """Initialize tokenizer."""
     global _GLOBAL_TOKENIZER
     _ensure_var_is_not_initialized(_GLOBAL_TOKENIZER, 'tokenizer')
@@ -56,11 +76,19 @@ def _build_tokenizer(args):
     return _GLOBAL_TOKENIZER
 
 
-def _set_tensorboard_writer(args):
+def get_tokenizer():
+    """Return tokenizer."""
+    _ensure_var_is_initialized(_GLOBAL_TOKENIZER, 'tokenizer')
+    return _GLOBAL_TOKENIZER
+
+
+# --- Global Tensorboard Writer ---
+_GLOBAL_TENSORBOARD_WRITER = None
+
+def _set_tensorboard_writer(args:GalvatronRuntimeArgs):
     """Set tensorboard writer. *args* is the full GalvatronRuntimeArgs."""
     global _GLOBAL_TENSORBOARD_WRITER
-    _ensure_var_is_not_initialized(_GLOBAL_TENSORBOARD_WRITER,
-                                   'tensorboard writer')
+    _ensure_var_is_not_initialized(_GLOBAL_TENSORBOARD_WRITER, 'tensorboard writer')
     log_cfg = args.logging
     if getattr(log_cfg, 'tensorboard_dir', None) and \
        args.rank == (args.world_size - 1):
@@ -76,11 +104,13 @@ def _set_tensorboard_writer(args):
                   'no TensorBoard logs will be written.', flush=True)
 
 
-def _set_wandb_writer(args):
+# --- Global Wandb Writer ---
+_GLOBAL_WANDB_WRITER = None
+
+def _set_wandb_writer(args:GalvatronRuntimeArgs):
     """Set wandb writer. *args* is the full GalvatronRuntimeArgs."""
     global _GLOBAL_WANDB_WRITER
-    _ensure_var_is_not_initialized(_GLOBAL_WANDB_WRITER,
-                                   'wandb writer')
+    _ensure_var_is_not_initialized(_GLOBAL_WANDB_WRITER, 'wandb writer')
     log_cfg = args.logging
     if getattr(log_cfg, 'wandb_project', '') and args.rank == (args.world_size - 1):
         if log_cfg.wandb_exp_name == '':
@@ -101,56 +131,48 @@ def _set_wandb_writer(args):
         _GLOBAL_WANDB_WRITER = wandb
 
 
-def _ensure_var_is_initialized(var, name):
-    """Make sure the input variable is not None."""
-    assert var is not None, '{} is not initialized.'.format(name)
-
-
-def _ensure_var_is_not_initialized(var, name):
-    """Make sure the input variable is not None."""
-    assert var is None, '{} is already initialized.'.format(name)
-
-
-def set_global_variables(args):
+# --- Total Global Variables ---
+def set_global_variables(args:GalvatronRuntimeArgs):
     """Set global variables."""
     set_args(args)
     _build_tokenizer(args)
     _set_tensorboard_writer(args)
     _set_wandb_writer(args)
 
-def _initialize_distributed(args):
-    device_count = torch.cuda.device_count()
-    if torch.distributed.is_initialized():
 
-        if args.rank == 0:
-            print(
-                "torch distributed is already initialized, " "skipping initialization ...",
-                flush=True,
-            )
-        args.rank = torch.distributed.get_rank()
-        args.world_size = torch.distributed.get_world_size()
+# --- pipeline related variables ---
+_GLOBAL_PP_COMM_GROUP:CommGroup = None
 
-    else:
+def set_pp_comm_group(comm_group:CommGroup):
+    global _GLOBAL_PP_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_PP_COMM_GROUP, 'pipeline parallel comm group')
+    _GLOBAL_PP_COMM_GROUP = comm_group
 
-        if args.rank == 0:
-            print("> initializing torch distributed ...", flush=True)
-        # Manually set the device ids.
-        if device_count > 0:
-            torch.cuda.set_device(args.local_rank)
-            device_id = torch.device(f'cuda:{args.local_rank}')
-        else:
-            device_id = None
 
-        # Call the init process
-        init_process_group_kwargs = {
-            'backend': args.distributed_backend,
-            'world_size': args.world_size,
-            'rank': args.rank,
-            # 'device_id': device_id,  Hint: Must disable device_id to save memory and time when generating new communication groups.
-            'timeout': timedelta(minutes=args.distributed_timeout_minutes),
-        }
+def get_pp_comm_group():
+    global _GLOBAL_PP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_PP_COMM_GROUP, 'pipeline parallel comm group')
+    return _GLOBAL_PP_COMM_GROUP
 
-        torch.distributed.init_process_group(**init_process_group_kwargs)
+
+def get_pp_world_size():
+    global _GLOBAL_PP_COMM_GROUP
+    assert _GLOBAL_PP_COMM_GROUP is not None, 'pipeline parallel group is not initialized'
+    return get_parallel_world_size(_GLOBAL_PP_COMM_GROUP.group)
+
+
+def get_pp_rank():
+    global _GLOBAL_PP_COMM_GROUP
+    assert _GLOBAL_PP_COMM_GROUP is not None, 'pipeline parallel group is not initialized'
+    return get_parallel_rank(_GLOBAL_PP_COMM_GROUP.group)
+
+
+def is_pipeline_first_stage():
+    return get_pp_rank() == 0
+
+
+def is_pipeline_last_stage():
+    return get_pp_rank() == get_pp_world_size() - 1
 
 
 # TODO: Add vpp support
@@ -158,121 +180,201 @@ def get_virtual_pipeline_model_parallel_rank():
     return None
 
 
-_GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP = None
-_GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP = None
-_GLOBAL_VOCAB_DATA_PARALLEL_GROUP = None
-_GLOBAL_PIPELINE_PARALLEL_GROUP = None
-_GLOBAL_TENSOR_MODEL_PARALLEL_SRC_RANK = None
+# --- vocab related variables ---
+_GLOBAL_VOCAB_TP_SP_COMM_GROUP:CommGroup = None
+_GLOBAL_VOCAB_CP_COMM_GROUP:CommGroup = None
+_GLOBAL_VOCAB_DP_COMM_GROUP:CommGroup = None
+_GLOBAL_VOCAB_TP_SP_SRC_RANK:int = None # TODO: Further verify the role and correctness
+_GLOBAL_VOCAB_TP_SP_CP_GROUP:torch.distributed.ProcessGroup = None
+
+def set_vocab_tp_sp_comm_group(comm_group:CommGroup):
+    global _GLOBAL_VOCAB_TP_SP_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_VOCAB_TP_SP_COMM_GROUP, 'vocab tp sp comm group')
+    _GLOBAL_VOCAB_TP_SP_COMM_GROUP = comm_group
 
 
-def set_tensor_model_parallel_src_rank(rank):
-    global _GLOBAL_TENSOR_MODEL_PARALLEL_SRC_RANK
-    _GLOBAL_TENSOR_MODEL_PARALLEL_SRC_RANK = rank
+def set_vocab_cp_comm_group(comm_group:CommGroup):
+    global _GLOBAL_VOCAB_CP_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_VOCAB_CP_COMM_GROUP, 'vocab cp comm group')
+    _GLOBAL_VOCAB_CP_COMM_GROUP = comm_group
 
 
-def get_tensor_model_parallel_src_rank():
-    global _GLOBAL_TENSOR_MODEL_PARALLEL_SRC_RANK
-    return _GLOBAL_TENSOR_MODEL_PARALLEL_SRC_RANK
+def set_vocab_dp_comm_group(comm_group:CommGroup):
+    global _GLOBAL_VOCAB_DP_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_VOCAB_DP_COMM_GROUP, 'vocab dp comm group')
+    _GLOBAL_VOCAB_DP_COMM_GROUP = comm_group
 
 
-def set_vocab_tensor_parallel_group(group):
-    global _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP
-    _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP = group
+def set_vocab_tp_sp_src_rank(rank:int):
+    global _GLOBAL_VOCAB_TP_SP_SRC_RANK
+    _ensure_var_is_not_initialized(_GLOBAL_VOCAB_TP_SP_SRC_RANK, 'vocab tp sp src rank')
+    _GLOBAL_VOCAB_TP_SP_SRC_RANK = rank
 
 
-def set_vocab_context_parallel_group(group):
-    global _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP
-    _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP = group
+def get_vocab_tp_sp_comm_group():
+    global _GLOBAL_VOCAB_TP_SP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_TP_SP_COMM_GROUP, 'vocab tp sp comm group')
+    return _GLOBAL_VOCAB_TP_SP_COMM_GROUP
 
 
-def set_vocab_data_parallel_group(group):
-    global _GLOBAL_VOCAB_DATA_PARALLEL_GROUP
-    _GLOBAL_VOCAB_DATA_PARALLEL_GROUP = group
+def get_vocab_cp_comm_group():
+    global _GLOBAL_VOCAB_CP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_CP_COMM_GROUP, 'vocab cp comm group')
+    return _GLOBAL_VOCAB_CP_COMM_GROUP
 
 
-def set_pipeline_parallel_group(group):
-    global _GLOBAL_PIPELINE_PARALLEL_GROUP
-    _GLOBAL_PIPELINE_PARALLEL_GROUP = group
+def get_vocab_dp_comm_group():
+    global _GLOBAL_VOCAB_DP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_DP_COMM_GROUP, 'vocab dp comm group')
+    return _GLOBAL_VOCAB_DP_COMM_GROUP
 
 
-def get_vocab_tensor_parallel_group():
-    global _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP
-    return _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP
+def get_vocab_tp_sp_src_rank():
+    global _GLOBAL_VOCAB_TP_SP_SRC_RANK
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_TP_SP_SRC_RANK, 'vocab tp sp src rank')
+    return _GLOBAL_VOCAB_TP_SP_SRC_RANK
 
 
-def get_vocab_context_parallel_group():
-    global _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP
-    return _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP
+def get_vocab_tp_sp_world_size():
+    global _GLOBAL_VOCAB_TP_SP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_TP_SP_COMM_GROUP, 'vocab tp sp comm group')
+    return get_parallel_world_size(_GLOBAL_VOCAB_TP_SP_COMM_GROUP.group)
 
 
-def get_vocab_data_parallel_group():
-    global _GLOBAL_VOCAB_DATA_PARALLEL_GROUP
-    return _GLOBAL_VOCAB_DATA_PARALLEL_GROUP
-
-def get_pipeline_parallel_group():
-    global _GLOBAL_PIPELINE_PARALLEL_GROUP
-    return _GLOBAL_PIPELINE_PARALLEL_GROUP
+def get_vocab_tp_sp_rank():
+    global _GLOBAL_VOCAB_TP_SP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_TP_SP_COMM_GROUP, 'vocab tp sp comm group')
+    return get_parallel_rank(_GLOBAL_VOCAB_TP_SP_COMM_GROUP.group)
 
 
-def get_vocab_tensor_parallel_world_size():
-    global _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP
-    assert _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_world_size(group=_GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP)
+def get_vocab_dp_world_size():
+    global _GLOBAL_VOCAB_DP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_DP_COMM_GROUP, 'vocab dp comm group')
+    return get_parallel_world_size(_GLOBAL_VOCAB_DP_COMM_GROUP.group)
 
 
-def get_vocab_tensor_parallel_rank():
-    global _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP
-    assert _GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_rank(group=_GLOBAL_VOCAB_TENSOR_PARALLEL_GROUP)
+def get_vocab_dp_rank():
+    global _GLOBAL_VOCAB_DP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_DP_COMM_GROUP, 'vocab dp comm group')
+    return get_parallel_rank(_GLOBAL_VOCAB_DP_COMM_GROUP.group)
 
 
-def get_vocab_context_parallel_world_size():
-    global _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP
-    assert _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_world_size(group=_GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP)
+def get_vocab_cp_world_size():
+    global _GLOBAL_VOCAB_CP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_CP_COMM_GROUP, 'vocab cp comm group')
+    return get_parallel_world_size(_GLOBAL_VOCAB_CP_COMM_GROUP.group)
 
 
-def get_vocab_context_parallel_rank():
-    global _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP
-    assert _GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_rank(group=_GLOBAL_VOCAB_CONTEXT_PARALLEL_GROUP)
+def get_vocab_cp_rank():
+    global _GLOBAL_VOCAB_CP_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_CP_COMM_GROUP, 'vocab cp comm group')
+    return get_parallel_rank(_GLOBAL_VOCAB_CP_COMM_GROUP.group)
 
 
-def get_vocab_data_parallel_world_size():
-    global _GLOBAL_VOCAB_DATA_PARALLEL_GROUP
-    assert _GLOBAL_VOCAB_DATA_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_world_size(group=_GLOBAL_VOCAB_DATA_PARALLEL_GROUP)
+def _set_vocab_tp_sp_cp_group():
+    global _GLOBAL_VOCAB_TP_SP_COMM_GROUP
+    global _GLOBAL_VOCAB_CP_COMM_GROUP
+    global _GLOBAL_VOCAB_TP_SP_CP_GROUP
+
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_TP_SP_COMM_GROUP, 'vocab tp sp comm group')
+    _ensure_var_is_initialized(_GLOBAL_VOCAB_CP_COMM_GROUP, 'vocab cp comm group')
+    _ensure_var_is_not_initialized(_GLOBAL_VOCAB_TP_SP_CP_GROUP, 'vocab tp sp cp comm group')
+    
+    tp_sp_ranks = _GLOBAL_VOCAB_TP_SP_COMM_GROUP.ranks
+    cp_ranks = _GLOBAL_VOCAB_CP_COMM_GROUP.ranks
+    ranks = sorted(list(set(tp_sp_ranks + cp_ranks)))
+    _GLOBAL_VOCAB_TP_SP_CP_GROUP = torch.distributed.new_group(ranks=ranks, backend='nccl')
+
+def get_vocab_tp_sp_cp_group():
+    global _GLOBAL_VOCAB_TP_SP_CP_GROUP
+    if _GLOBAL_VOCAB_TP_SP_CP_GROUP is None:
+        _set_vocab_tp_sp_cp_group()
+    return _GLOBAL_VOCAB_TP_SP_CP_GROUP
+
+def get_vocab_tp_sp_cp_world_size():
+    global _GLOBAL_VOCAB_TP_SP_CP_GROUP
+    if _GLOBAL_VOCAB_TP_SP_CP_GROUP is None:
+        _set_vocab_tp_sp_cp_group()
+    return get_parallel_world_size(_GLOBAL_VOCAB_TP_SP_CP_GROUP)
 
 
-def get_vocab_data_parallel_rank():
-    global _GLOBAL_VOCAB_DATA_PARALLEL_GROUP
-    assert _GLOBAL_VOCAB_DATA_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_rank(group=_GLOBAL_VOCAB_DATA_PARALLEL_GROUP)
+def get_vocab_tp_sp_cp_rank():
+    global _GLOBAL_VOCAB_TP_SP_CP_GROUP
+    if _GLOBAL_VOCAB_TP_SP_CP_GROUP is None:
+        _set_vocab_tp_sp_cp_group()
+    return get_parallel_rank(_GLOBAL_VOCAB_TP_SP_CP_GROUP)
 
 
-def get_pipeline_parallel_world_size():
-    global _GLOBAL_PIPELINE_PARALLEL_GROUP
-    assert _GLOBAL_PIPELINE_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_world_size(group=_GLOBAL_PIPELINE_PARALLEL_GROUP)
+# --- transformer layer related variables ---
+_GLOBAL_TP_WHOLE_COMM_GROUP:List[CommGroup] = None
+_GLOBAL_SP_WHOLE_COMM_GROUP:List[CommGroup] = None
+_GLOBAL_DP_WHOLE_COMM_GROUP:List[CommGroup] = None
+_GLOBAL_CP_WHOLE_COMM_GROUP:List[CommGroup] = None
+_GLOBAL_SDP_WHOLE_COMM_GROUP:List[CommGroup] = None
+
+def set_tp_whole_comm_group(whole_comm_group:List[CommGroup]):
+    global _GLOBAL_TP_WHOLE_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_TP_WHOLE_COMM_GROUP, 'tp_whole_comm_group')
+    _GLOBAL_TP_WHOLE_COMM_GROUP = whole_comm_group
 
 
-def get_pipeline_parallel_rank():
-    global _GLOBAL_PIPELINE_PARALLEL_GROUP
-    assert _GLOBAL_PIPELINE_PARALLEL_GROUP is not None, 'pipeline parallel group is not initialized'
-    return torch.distributed.get_rank(group=_GLOBAL_PIPELINE_PARALLEL_GROUP)
+def set_sp_whole_comm_group(whole_comm_group:List[CommGroup]):
+    global _GLOBAL_SP_WHOLE_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_SP_WHOLE_COMM_GROUP, 'sp_whole_comm_group')
+    _GLOBAL_SP_WHOLE_COMM_GROUP = whole_comm_group
 
 
-def get_parallel_world_size(group):
-    return torch.distributed.get_world_size(group=group)
+def set_dp_whole_comm_group(whole_comm_group:List[CommGroup]):
+    global _GLOBAL_DP_WHOLE_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_DP_WHOLE_COMM_GROUP, 'dp_whole_comm_group')
+    _GLOBAL_DP_WHOLE_COMM_GROUP = whole_comm_group
 
 
-def get_parallel_rank(group):
-    return torch.distributed.get_rank(group=group)
+def set_cp_whole_comm_group(whole_comm_group:List[CommGroup]):
+    global _GLOBAL_CP_WHOLE_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_CP_WHOLE_COMM_GROUP, 'cp_whole_comm_group')
+    _GLOBAL_CP_WHOLE_COMM_GROUP = whole_comm_group
 
 
-def is_pipeline_first_stage():
-    return get_pipeline_parallel_rank() == 0
+def set_sdp_whole_comm_group(whole_comm_group:List[CommGroup]):
+    global _GLOBAL_SDP_WHOLE_COMM_GROUP
+    _ensure_var_is_not_initialized(_GLOBAL_SDP_WHOLE_COMM_GROUP, 'sdp_whole_comm_group')
+    _GLOBAL_SDP_WHOLE_COMM_GROUP = whole_comm_group
 
 
-def is_pipeline_last_stage():
-    return get_pipeline_parallel_rank() == get_pipeline_parallel_world_size() - 1
+def get_tp_whole_comm_group():
+    global _GLOBAL_TP_WHOLE_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_TP_WHOLE_COMM_GROUP, 'tp_whole_comm_group')
+    return _GLOBAL_TP_WHOLE_COMM_GROUP
+
+
+def get_sp_whole_comm_group():
+    global _GLOBAL_SP_WHOLE_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_SP_WHOLE_COMM_GROUP, 'sp_whole_comm_group')
+    return _GLOBAL_SP_WHOLE_COMM_GROUP
+
+
+def get_dp_whole_comm_group():
+    global _GLOBAL_DP_WHOLE_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_DP_WHOLE_COMM_GROUP, 'dp_whole_comm_group')
+    return _GLOBAL_DP_WHOLE_COMM_GROUP
+
+
+def get_cp_whole_comm_group():
+    global _GLOBAL_CP_WHOLE_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_CP_WHOLE_COMM_GROUP, 'cp_whole_comm_group')
+    return _GLOBAL_CP_WHOLE_COMM_GROUP
+
+
+def get_sdp_whole_comm_group():
+    global _GLOBAL_SDP_WHOLE_COMM_GROUP
+    _ensure_var_is_initialized(_GLOBAL_SDP_WHOLE_COMM_GROUP, 'sdp_whole_comm_group')
+    return _GLOBAL_SDP_WHOLE_COMM_GROUP
+
+
+# --- MoE Related Variables ---
+_MOE_LAYER_WISE_LOGGING_TRACKER = {}
+
+def get_moe_layer_wise_logging_tracker():
+    global _MOE_LAYER_WISE_LOGGING_TRACKER
+    return _MOE_LAYER_WISE_LOGGING_TRACKER

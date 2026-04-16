@@ -13,7 +13,7 @@ from transformers import GPT2Config, GPT2LMHeadModel
 
 from galvatron.core.runtime.datasets import RandomTokenDataset, random_collate_fn
 from galvatron.core.runtime.models.builder import build_model
-from galvatron.core.runtime.parallel_state import _set_global_memory_buffer, set_args
+from galvatron.core.runtime.parallel_state import set_global_memory_buffer, set_args
 from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_gpt
 from galvatron.utils.training_utils import distributed_dataloader, set_seed
 from tests.utils.init_dist import init_dist_env
@@ -77,7 +77,7 @@ def _run_test(test_args: Dict[str, Any]):
         seed=seed,
     )
     set_args(args)
-    _set_global_memory_buffer()
+    set_global_memory_buffer()
 
     hf_config = GPT2Config(
         n_embd=args.model.hidden_size,

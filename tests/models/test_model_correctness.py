@@ -17,7 +17,7 @@ from transformers import GPT2Config, GPT2LMHeadModel, LlamaConfig, LlamaForCausa
 
 from galvatron.core.runtime.datasets import RandomTokenDataset, random_collate_fn
 from galvatron.core.runtime.models.builder import build_model
-from galvatron.core.runtime.parallel_state import _set_global_memory_buffer, set_args
+from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
 from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_gpt, convert_checkpoints_llama
 from galvatron.utils.training_utils import distributed_dataloader, set_seed
 from tests.models.configs.get_config_json import ConfigFactory
@@ -158,7 +158,7 @@ def _run_test(test_args: Dict[str, Any]):
             baseline_model = baseline_model.to(device)
 
     set_args(args)
-    _set_global_memory_buffer()
+    set_global_memory_buffer()
 
     torch.distributed.barrier()
 

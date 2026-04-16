@@ -21,6 +21,10 @@ from galvatron.core.runtime.utils.utils import get_layernorm_offset
 from galvatron.core.runtime.utils.utils import print_rank_0
 
 from galvatron.core.runtime.tensor_parallel.random import set_seed_with_group
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
+from galvatron.core.runtime.models.arch import ModelInfo, BlockNames
+from galvatron.core.runtime.pipeline import PipelineParallel
+from galvatron.core.runtime import parallel_state
 
 version_str = torch.__version__
 version_major, version_minor, _ = version_str.split(".")
@@ -36,11 +40,11 @@ else:
 
 
 class GalvatronModel(nn.Module):
-    def __init__(self, hp_model):
+    def __init__(self, hp_model: PipelineParallel):
         super().__init__()
-        from galvatron.core import get_args
+        from galvatron.core.runtime.parallel_state import get_args
 
-        self.args = get_args()
+        self.args: GalvatronRuntimeArgs = get_args()
         self.model = hp_model
         self.iter = 0
 
@@ -94,15 +98,15 @@ class GalvatronModel(nn.Module):
 
 def construct_hybrid_parallel_model_api(
     arch_list: List[str],
-    args,
-    hybrid_parallel_configs,
-    model_info,
-    block_names,
+    args:GalvatronRuntimeArgs,
+    hybrid_parallel_configs:dict,
+    model_info:ModelInfo,
+    block_names:BlockNames,
     layernorm_name: Optional[List[str]] = None,
     tied_wte_attr_names=None,
     load_module_func=None,
     meta_init_buffer=True,
-):
+) -> GalvatronModel:
     """Build a hybrid-parallel model from an architecture list.
 
     Args:
@@ -178,6 +182,19 @@ def construct_hybrid_parallel_model_api(
         is_moe_model=hp_configs_whole["is_moe_model"],
         show_rank=0,
     )
+
+    parallel_state.set_pp_comm_group(pp_group)
+
+    parallel_state.set_vocab_tp_sp_comm_group(sp_groups_whole[0] if args.parallel.use_ulysses else tp_groups_whole[0])
+    parallel_state.set_vocab_cp_comm_group(cp_groups_whole[0])
+    parallel_state.set_vocab_dp_comm_group(dp_groups_whole[0])
+    parallel_state.set_vocab_tp_sp_src_rank(sp_groups_whole[0].ranks[0] if args.parallel.use_ulysses else tp_groups_whole[0].ranks[0])
+
+    parallel_state.set_tp_whole_comm_group(tp_groups_whole[1:-2])
+    parallel_state.set_sp_whole_comm_group(sp_groups_whole[1:-2])
+    parallel_state.set_dp_whole_comm_group(dp_groups_whole[1:-2])
+    parallel_state.set_cp_whole_comm_group(cp_groups_whole[1:-2])
+    parallel_state.set_sdp_whole_comm_group(seq_data_groups_whole[1:-2])
 
     assert args.model.shape_order == "SBH", "Shape order must be SBH for hybrid parallel model!"
 
@@ -276,5 +293,10 @@ def construct_hybrid_parallel_model_api(
     model.sp_groups_whole = sp_groups_whole
     model.cp_groups_whole = cp_groups_whole
     model.sdp_groups_whole = seq_data_groups_whole
+    model.ep_groups_whole = ep_groups_whole
+    model.tp_of_ep_groups_whole = tp_of_ep_groups_whole
+    model.tp_and_ep_groups_whole = tp_and_ep_groups_whole
+    model.dp_of_ep_groups_whole = dp_of_ep_groups_whole
     model.hybrid_parallel_configs = hybrid_parallel_configs
+
     return model

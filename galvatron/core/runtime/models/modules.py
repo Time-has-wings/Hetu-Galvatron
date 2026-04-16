@@ -1,11 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.distributed as dist
 
 from galvatron.core.runtime import parallel_state
-from galvatron.core.runtime.args_schema import GalvatronModelArgs
 from galvatron.core.runtime.tensor_parallel.layers import (
-    ColumnParallelLinear,  
+    ColumnParallelLinear,
     RowParallelLinear,
     VocabParallelEmbedding,
 )
@@ -17,7 +15,6 @@ from galvatron.core.runtime.tensor_parallel.utils import VocabUtility, divide
 
 from galvatron.core.runtime.transformer.attention import SelfAttention, SelfAttentionSubmodules, AttnMaskType
 from galvatron.core.runtime.transformer.attention_impl import (
-    # DotProductAttention,
     FlashSelfOrCrossAttention,
     DistributedAttention,
     ZigzagRingFlashAttention,
@@ -28,6 +25,7 @@ from galvatron.core.runtime.transformer.fused_kernels import fused_vocab_paralle
 from galvatron.core.runtime.transformer.rotary_pos_embedding import RotaryEmbedding
 from galvatron.core.runtime.tensor_parallel.layers import linear_with_grad_accumulation_and_async_allreduce
 from galvatron.core.runtime.transformer.norm import GalvatronNorm
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
 
 
 # =========================================================================
@@ -40,7 +38,7 @@ class GalvatronEmbedding(nn.Module):
     Supports vocab-parallel embedding and sequence-parallel scatter.
     """
 
-    def __init__(self, args, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args: GalvatronRuntimeArgs, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.sequence_parallel = args.train.sequence_parallel
@@ -71,8 +69,8 @@ class GalvatronEmbedding(nn.Module):
             cp_size = parallel_state.get_parallel_world_size(self.cp_group) if self.cp_group is not None else 1
             seq_len = args.train.seq_length // cp_size
             self.seq_start, self.seq_end = VocabUtility.vocab_range_from_global_vocab_size(
-                seq_len, 
-                parallel_state.get_parallel_rank(self.sp_group), 
+                seq_len,
+                parallel_state.get_parallel_rank(self.sp_group),
                 parallel_state.get_parallel_world_size(self.sp_group),
             )
 
@@ -84,8 +82,6 @@ class GalvatronEmbedding(nn.Module):
 
         if self.has_position_embedding:
             if position_ids is None:
-                # VocabParallelEmbedding with sequence_parallel transposes to [S, B, H];
-                # position ids must match that layout or (1,S,H) broadcasts to [S,S,H] and corrupts activations.
                 if self.embed_tokens.reduce_scatter_embeddings:
                     s, b = hidden_states.shape[0], hidden_states.shape[1]
                     position_ids = torch.arange(s, device=hidden_states.device).unsqueeze(1).expand(s, b)
@@ -105,13 +101,9 @@ class GalvatronEmbedding(nn.Module):
 # =========================================================================
 
 class GalvatronAttention(nn.Module):
-    """Pre-norm self-attention with residual connection.
+    """Pre-norm self-attention with residual connection."""
 
-    Includes RoPE, GQA, QK-norm etc., all driven by ``args.model.*``.
-    Can be used standalone in an arch list (type ``"attention"``).
-    """
-
-    def __init__(self, args, layer_number, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args: GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.sequence_parallel = args.train.sequence_parallel
@@ -121,6 +113,7 @@ class GalvatronAttention(nn.Module):
         self.use_ulysses = self.sp_size > 1
         self.use_zigzag_cp = self.cp_size > 1
 
+        self.layer_idx = layer_idx
         self.cp_group = cp_group.group if cp_group is not None else None
         self.sp_group = sp_group.group if sp_group is not None else None
         self.tp_group = tp_group.group if tp_group is not None else None
@@ -137,7 +130,6 @@ class GalvatronAttention(nn.Module):
             m,
             SelfAttentionSubmodules(
                 linear_qkv=ColumnParallelLinear,
-                # core_attention=DotProductAttention,
                 flash_attention=FlashSelfOrCrossAttention,
                 dist_attention=DistributedAttention,
                 zigzag_ring_flash_attn=ZigzagRingFlashAttention,
@@ -145,7 +137,7 @@ class GalvatronAttention(nn.Module):
                 q_layernorm=q_ln,
                 k_layernorm=k_ln,
             ),
-            layer_number,
+            layer_idx,
             attn_mask_type=AttnMaskType.causal,
             tp_group=self.tp_group,
             sp_group=self.sp_group,
@@ -174,19 +166,14 @@ class GalvatronAttention(nn.Module):
             if self.use_ulysses:
                 if self.use_zigzag_cp:
                     return self.rotary_pos_emb(seq_len * self.cp_size * self.sp_size)
-                else:
-                    offset = seq_len * parallel_state.get_parallel_rank(self.sp_group)
-                    return self.rotary_pos_emb(seq_len, offset=offset)
-            else:
-                if self.use_zigzag_cp:
-                    return self.rotary_pos_emb(seq_len * self.tp_size * self.cp_size)
-                else:
-                    return self.rotary_pos_emb(seq_len * self.tp_size)
-        else:
+                offset = seq_len * parallel_state.get_parallel_rank(self.sp_group)
+                return self.rotary_pos_emb(seq_len, offset=offset)
             if self.use_zigzag_cp:
-                return self.rotary_pos_emb(seq_len * self.cp_size)
-            else:
-                return self.rotary_pos_emb(seq_len)
+                return self.rotary_pos_emb(seq_len * self.tp_size * self.cp_size)
+            return self.rotary_pos_emb(seq_len * self.tp_size)
+        if self.use_zigzag_cp:
+            return self.rotary_pos_emb(seq_len * self.cp_size)
+        return self.rotary_pos_emb(seq_len)
 
     def forward(self, hidden_states, position_ids, attention_mask, rotary_embedding):
         residual = hidden_states
@@ -203,12 +190,9 @@ class GalvatronAttention(nn.Module):
 # =========================================================================
 
 class GalvatronMLP(nn.Module):
-    """Pre-norm feed-forward with residual connection.
+    """Pre-norm feed-forward with residual connection."""
 
-    Can be used standalone in an arch list (type ``"mlp"``).
-    """
-
-    def __init__(self, args, layer_number, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args: GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.tp_group = tp_group.group if tp_group is not None else None
@@ -237,16 +221,13 @@ class GalvatronMLP(nn.Module):
 # =========================================================================
 
 class GalvatronDecoderLayer(nn.Module):
-    """Pre-norm decoder block = ``GalvatronAttention`` + ``GalvatronMLP``.
+    """Pre-norm decoder block = ``GalvatronAttention`` + ``GalvatronMLP``."""
 
-    Used as a single unit in the arch list (type ``"decoder"``).
-    """
-
-    def __init__(self, args, layer_number, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args: GalvatronRuntimeArgs, layer_idx, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
-        self.idx = layer_number
-        self.attn = GalvatronAttention(args, layer_number, tp_group, sp_group, cp_group)
-        self.ffn = GalvatronMLP(args, layer_number, tp_group, sp_group, cp_group)
+        self.idx = layer_idx
+        self.attn = GalvatronAttention(args, layer_idx, tp_group, sp_group, cp_group)
+        self.ffn = GalvatronMLP(args, layer_idx, tp_group, sp_group, cp_group)
 
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
         hidden_states = self.attn(hidden_states, position_ids, attention_mask, rotary_embedding)
@@ -261,7 +242,7 @@ class GalvatronDecoderLayer(nn.Module):
 class GalvatronFinalNorm(nn.Module):
     """Final normalization layer before the LM head."""
 
-    def __init__(self, args):
+    def __init__(self, args: GalvatronRuntimeArgs):
         super().__init__()
         m = args.model
         self.norm = GalvatronNorm(m, m.hidden_size, eps=m.norm_epsilon)
@@ -309,7 +290,7 @@ class _LMHeadLinear(nn.Module):
 class GalvatronCausalLMHead(nn.Module):
     """TP-aware causal language model head with vocab-parallel cross-entropy."""
 
-    def __init__(self, args, tp_group=None, sp_group=None, cp_group=None):
+    def __init__(self, args: GalvatronRuntimeArgs, tp_group=None, sp_group=None, cp_group=None):
         super().__init__()
         m = args.model
         self.sequence_parallel = args.train.sequence_parallel
@@ -326,7 +307,9 @@ class GalvatronCausalLMHead(nn.Module):
             cp_size = parallel_state.get_parallel_world_size(self.cp_group) if self.cp_group is not None else 1
             seq_len = args.train.seq_length // cp_size
             self.seq_start, self.seq_end = VocabUtility.vocab_range_from_global_vocab_size(
-                seq_len, parallel_state.get_parallel_rank(self.sp_group), parallel_state.get_parallel_world_size(self.sp_group),
+                seq_len,
+                parallel_state.get_parallel_rank(self.sp_group),
+                parallel_state.get_parallel_world_size(self.sp_group),
             )
 
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None, rotary_embedding=None):
@@ -353,3 +336,11 @@ class GalvatronCausalLMHead(nn.Module):
 
         loss = loss.transpose(0, 1).contiguous()
         return loss
+
+
+from .moe_modules import (
+    GalvatronMoEAttention,
+    GalvatronMoERouter,
+    GalvatronMoEMLP,
+    GalvatronMoEDecoderLayer,
+)

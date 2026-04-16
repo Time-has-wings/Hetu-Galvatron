@@ -10,16 +10,13 @@ import sys
 import torch
 
 from galvatron.core.arguments import load_with_hydra
-from galvatron.core import (
-    clip_grad_norm,
-    get_optimizer_and_param_scheduler,
-)
+from galvatron.core.runtime.optimizer.utils import clip_grad_norm, get_optimizer_and_param_scheduler
 from galvatron.core.runtime.models.builder import build_model, get_runtime_profiler
 from galvatron.core.runtime.dataloader import get_batch, get_train_valid_test_data_iterators
 from galvatron.core.runtime.utils.utils import set_megatron_args_for_dataset
 from galvatron.core.runtime.initialize import initialize_galvatron, _print_args
 from galvatron.utils.hf_config_adapter import resolve_model_config
-
+from galvatron.core.runtime.checkpoint.llama_adapter import save_llama_module
 
 def train(args):
     local_rank = args.local_rank
@@ -33,13 +30,7 @@ def train(args):
     if local_rank == 0:
         print("Creating Dataset...")
 
-    set_megatron_args_for_dataset(
-        args,
-        model,
-        model.sp_groups_whole[0] if getattr(args.parallel, "vocab_sp", 0) else model.tp_groups_whole[0],
-        model.dp_groups_whole[0],
-        model.cp_groups_whole[0],
-    )
+    set_megatron_args_for_dataset(args)
 
     _print_args(args)
 
@@ -73,6 +64,9 @@ def train(args):
 
         lr = optimizer.param_groups[0]["lr"]
         profiler.profile_time_end(iter_idx, loss, lr, grad_norm)
+
+        if args.ckpt.save is not None and args.ckpt.save_interval is not None and (iter_idx + 1) % args.ckpt.save_interval == 0:
+            save_llama_module(args.ckpt.save, model, optimizer, opt_param_scheduler, iter_idx + 1, args)
 
         torch.distributed.barrier()
 

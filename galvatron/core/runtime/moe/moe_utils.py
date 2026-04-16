@@ -8,7 +8,7 @@ import torch
 from galvatron.core.runtime import parallel_state
 from galvatron.core.runtime.tensor_parallel.mappings import gather_from_sequence_parallel_region
 from galvatron.core.runtime.moe.fused_kernels import moe_permute as fused_permute, moe_unpermute as fused_unpermute, moe_sort_chunks_by_index as fused_sort_chunks_by_index
-HAVE_TE = True
+HAVE_TE = False
 
 
 def switch_load_balancing_loss_func(
@@ -547,7 +547,7 @@ def topk_softmax_with_capacity(
 def save_to_aux_losses_tracker(
     name: str,
     loss: torch.Tensor,
-    layer_number: int,
+    layer_idx: int,
     num_layers: int,
     reduce_group: torch.distributed.ProcessGroup = None,
     avg_group: torch.distributed.ProcessGroup = None,
@@ -556,20 +556,20 @@ def save_to_aux_losses_tracker(
     Args:
         name (str): The name of the loss.
         loss (torch.Tensor): The loss tensor.
-        layer_number (int): Layer index of the loss.
+        layer_idx (int): Layer index of the loss.
         num_layers (int): The number of total layers.
         reduce_group (torch.distributed.ProcessGroup): The group for reducing the loss.
         mean_group (torch.distributed.ProcessGroup): The group for averaging the loss.
     """
-    # Skip aux loss logging if layer_number is None.
-    if layer_number is None:
+    # Skip aux loss logging if layer_idx is None.
+    if layer_idx is None:
         return
 
     tracker = parallel_state.get_moe_layer_wise_logging_tracker()
     if name not in tracker:
         tracker[name] = {}
         tracker[name]["values"] = torch.zeros(num_layers, device=loss.device)
-    tracker[name]["values"][layer_number - 1] += loss.detach()  # Aggregate the loss for the layer.
+    tracker[name]["values"][layer_idx - 1] += loss.detach()  # Aggregate the loss for the layer.
     tracker[name]["reduce_group"] = reduce_group
     tracker[name]["avg_group"] = avg_group
 

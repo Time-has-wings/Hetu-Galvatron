@@ -1,0 +1,70 @@
+# ============================================================
+# Galvatron Universal Model Config Template
+# ============================================================
+#
+# Two ways to define a model:
+#
+#   Method 1 — HuggingFace auto-detection (recommended):
+#     Set `hf_model_name_or_path` and leave other fields as null.
+#     All architecture fields will be auto-populated.
+#
+#   Method 2 — Manual specification:
+#     Set `hf_model_name_or_path: null` and fill in the fields below.
+#
+# Field names match GalvatronModelArgs exactly.
+# Null fields use schema defaults or are auto-detected.
+# ============================================================
+
+# --- Model Source ---
+# HuggingFace Hub model name, local path, or null for manual config.
+# Examples: "meta-llama/Llama-2-7b-hf", "openai-community/gpt2", "./my_model/"
+hf_model_name_or_path: null
+
+# --- Model Name (for logging / profiler output) ---
+model_size: null            # e.g. "llama2-7b", "gpt2-small", "my-custom-model"
+
+# --- Core Dimensions ---
+hidden_size: null           # Transformer hidden dimension (e.g. 4096)
+num_layers: null            # Number of transformer layers (e.g. 32)
+num_attention_heads: null   # Number of attention heads (e.g. 32)
+num_query_groups: null      # KV heads for GQA. null = MHA (heads == kv_heads)
+ffn_hidden_size: null       # MLP intermediate size (e.g. 11008). null = hidden_size * 4
+vocab_size: null            # Vocabulary size (e.g. 32000)
+kv_channels: null           # Per-head dim (head_dim). null = hidden_size / num_attention_heads
+
+# --- Normalization ---
+# "RMSNorm" for LLaMA/Mistral/Qwen, "LayerNorm" for GPT-2/Falcon
+normalization: RMSNorm
+norm_epsilon: 1.0e-5
+
+# --- Activation ---
+# SwiGLU (LLaMA/Mistral/Qwen): activation_func=silu, gated_linear_unit=true
+# GELU (GPT-2/Falcon):          activation_func=gelu, gated_linear_unit=false
+activation_func: torch.nn.functional.silu
+gated_linear_unit: true
+
+# --- Attention ---
+qk_layernorm: false         # Apply norm to Q/K before attention (Qwen3, Llama4, Gemma2)
+
+# --- Position Embedding ---
+# "rope" for LLaMA/Mistral/Qwen, "learned_absolute" for GPT-2
+# Also: "mrope", "relative", "none"
+position_embedding_type: rope
+rotary_base: 10000          # RoPE theta (e.g. 500000 for Llama-3, 1000000 for Qwen3)
+rotary_percent: 1.0         # Fraction of hidden dim that uses RoPE
+rotary_interleaved: false
+apply_rope_fusion: true
+
+# --- Bias ---
+add_bias_linear: false      # Bias in all linear layers
+add_qkv_bias: false         # Bias in QKV projections only
+
+# --- Embeddings ---
+untie_embeddings_and_output_weights: false
+make_vocab_size_divisible_by: 128
+
+# --- MoE (set only if using Mixture-of-Experts) ---
+# num_moe_experts: null
+# moe_ffn_hidden_size: null
+# moe_router_topk: 2
+# moe_shared_expert_intermediate_size: null

@@ -1,10 +1,11 @@
 import json
 from typing import Dict
 from pathlib import Path
-from tests.utils.search_args import SearchArgs
-from tests.utils.model_utils import ModelFactory
-from tests.models.configs.get_config_json import ConfigFactory
+from pydantic import BaseModel
+# from tests.utils.search_args import SearchArgs
+from tests.utils.model_utils_new import ModelFactory
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
+from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 
 def create_static_time_config() -> Dict[str, float]:
     """Create mock time config for static profiling mode"""
@@ -562,7 +563,7 @@ def write_time_config(
         "sequence": create_sequence_time_config
     }[profile_mode]()
     
-    with open(configs_dir / f"computation_profiling_{precision}_{model_name}.json", "w") as f:
+    with open(configs_dir / f"computation_profiling_{precision}_{model_name}_all.json", "w") as f:
         json.dump(time_config, f)
 
 def write_memory_config(
@@ -580,7 +581,7 @@ def write_memory_config(
         "sequence": create_sequence_memory_config_sp,
     }[profile_mode]()
     
-    with open(configs_dir / f"memory_profiling_{precision}_{model_name}.json", "w") as f:
+    with open(configs_dir / f"memory_profiling_{precision}_{model_name}_all.json", "w") as f:
         json.dump(memory_config, f)
 
 def write_hardware_config(
@@ -608,44 +609,78 @@ def write_hardware_config(
     with open(hardware_dir / f"sp_time_{num_nodes}nodes_{gpus_per_node}gpus_per_node.json", "w") as f:
         json.dump(hw_configs["sp"], f)
 
+def _auto_update_nested_args(model: BaseModel, flat_updates: Dict) -> BaseModel:
+    """Auto-route flat field updates to the correct nested pydantic sub-model."""
+    field_to_child = {}
+    top_level_fields = set(model.model_fields.keys())
+
+    for child_name in top_level_fields:
+        child = getattr(model, child_name, None)
+        if not isinstance(child, BaseModel):
+            continue
+        for field_name in child.model_fields.keys():
+            if field_name in field_to_child and field_to_child[field_name] != child_name:
+                raise ValueError(
+                    f"Ambiguous field '{field_name}' exists in both "
+                    f"'{field_to_child[field_name]}' and '{child_name}'."
+                )
+            field_to_child[field_name] = child_name
+
+    top_updates = {}
+    child_updates = {}
+    for key, value in flat_updates.items():
+        if key in top_level_fields:
+            top_updates[key] = value
+            continue
+        child_name = field_to_child.get(key)
+        if child_name is None:
+            raise ValueError(f"Unknown override field: {key}")
+        child_updates.setdefault(child_name, {})[key] = value
+
+    if top_updates:
+        model = model.model_copy(update=top_updates)
+    for child_name, updates in child_updates.items():
+        child = getattr(model, child_name)
+        setattr(model, child_name, child.model_copy(update=updates))
+    return model
+
 def initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode = "static", memory_mode = "static", sp_enabled = False, seqlen_list = None, **kwargs):
     """Initialize search engine"""
     configs_dir, hardware_dir, output_dir = base_config_dirs
 
     # Setup search engine
-    args = SearchArgs()
-    model_layer_configs, model_name = ModelFactory.get_meta_configs(model_type, backend)
-    config_json = ConfigFactory.get_config_json(model_type)
-    args.model_size = config_json
-    args.local_rank = 0
-    args.log_dir = base_log_dirs
-    config = ModelFactory.create_config(model_type, backend, args)
+    args = GalvatronSearchArgs()
 
     # Set profiling paths and modes
-    args.time_profiling_path = str(configs_dir)
-    args.memory_profiling_path = str(configs_dir)
-    args.allreduce_bandwidth_config_path = str(hardware_dir)
-    args.p2p_bandwidth_config_path = str(hardware_dir)
-    args.overlap_coe_path = str(hardware_dir)
-    args.sp_time_path = str(hardware_dir)
+    args.options_info.log_dir = base_log_dirs
+    args.profiling_info.memory_profiling_path = str(configs_dir)
+    args.profiling_info.time_profiling_path = str(configs_dir)
+    args.profiling_info.allreduce_bandwidth_config_path = str(hardware_dir)
+    args.profiling_info.p2p_bandwidth_config_path = str(hardware_dir)
+    args.profiling_info.overlap_coe_path = str(hardware_dir)
+    args.profiling_info.sp_time_path = str(hardware_dir)
+    args.profiling_info.time_profile_mode = time_mode
+    args.profiling_info.memory_profile_mode = memory_mode
+    args.common_train_info.sequence_parallel = sp_enabled
     output_dir.mkdir(exist_ok=True)
-    args.output_config_path = str(output_dir)
-    args.time_profile_mode = time_mode
-    args.memory_profile_mode = memory_mode
-    args.sequence_parallel = sp_enabled
+    args.options_info.output_config_path = str(output_dir)
 
-    for k, v in kwargs.items():
-        setattr(args, k, v)
+    if kwargs:
+        args = _auto_update_nested_args(args, kwargs)
+    
+    ModelFactory.resolve_model_config(args, model_type, backend)
+    model_layer_configs_func = ModelFactory.get_model_layer_configs_func()
+    model_name_func = ModelFactory.get_model_name_func()
 
     # Initialize search engine
     search_engine = GalvatronSearchEngine(args)
-    search_engine.set_search_engine_info(str(configs_dir), model_layer_configs(config), model_type)
+    search_engine.set_search_engine_info(str(configs_dir), model_layer_configs_func(args), model_name_func(args))
     if seqlen_list is not None:
         search_engine.seqlen_list = seqlen_list
 
     # Write config files
-    write_time_config(configs_dir, profile_mode=time_mode, model_name=model_type)
-    write_memory_config(configs_dir, profile_mode=memory_mode, sp_mode=sp_enabled, model_name=model_type)
+    write_time_config(configs_dir, profile_mode=time_mode, model_name=model_name_func(args))
+    write_memory_config(configs_dir, profile_mode=memory_mode, sp_mode=sp_enabled, model_name=model_name_func(args))
     write_hardware_config(hardware_dir)
     # Initialize search engine
     search_engine.initialize_search_engine()

@@ -1,30 +1,27 @@
 import os
 import copy
-import logging
 import numpy as np
-from galvatron.utils import (
-    read_allreduce_bandwidth_config, 
-    read_json_config, 
-    read_p2p_bandwidth_config, 
-    form_strategy, 
-    print_strategies,
-    strategy2config,
-    array2str,
-    write_json_config,
-    remap_config,
-    num2str
-)
+from typing import List, Any, Union
+from rich.pretty import pretty_repr
 from scipy.optimize import curve_fit
-from .cost_model import pipeline_costmodel
-from .cost_model import MemoryCostModel, TimeCostModel
-from .dynamic_programming import DpOnModel
-from .utils import ensure_log_dir, get_thread_logger
-from .cost_model_args import ModelArgs, ParallelArgs, TrainArgs, ProfileModelArgs, ProfileHardwareArgs
+
+from galvatron.utils import read_allreduce_bandwidth_config, read_json_config, read_p2p_bandwidth_config, array2str, write_json_config, remap_config, num2str, remap_config_for_latency
+from galvatron.utils.strategy_utils import AttentionStrategy, FFNStrategy, EmbeddingLMHeadStrategy, LayerStrategy, DPType, ColorSet, is_power_of_two, print_strategy_list, strategy_list2config
+
+from galvatron.core.cost_model.cost_model_handler import pipeline_costmodel
+from galvatron.core.cost_model.components.embedding_lmhead_cost import EmbeddingLMHeadTimeCostModel, EmbeddingLMHeadMemoryCostModel
+from galvatron.core.cost_model.components.layer_cost import MemoryCostModelBase
+from galvatron.core.cost_model.cost_model_args import ModelArgs, ParallelArgs, TrainArgs, ProfileModelArgs, ProfileHardwareArgs
+
+from galvatron.core.search_engine.utils import get_thread_logger_single_task, ensure_log_dir
+from galvatron.core.search_engine.dynamic_programming import DpOnModel
+
+from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 
 class GalvatronSearchEngine():
-    def __init__(self, args):
+    def __init__(self, args: GalvatronSearchArgs):
         self.args = args
-        args.gpu_num = args.num_nodes * args.num_gpus_per_node
+        self.world_size = args.hardware_info.num_nodes * args.hardware_info.num_gpus_per_node
         self.layernum_arg_names = None
         self.mem_path = None
         self.time_path = None
@@ -36,10 +33,7 @@ class GalvatronSearchEngine():
         self.other_memory_pp_off = None
         self.other_memory_pp_on = None
         self.time_profiled_list = None
-        self.use_pipeline_costmodel = args.use_pipeline_costmodel
-        self.model_type = 'gpt'
-        self.optimal_chunk_func = optimal_chunk_func_default
-        self.memory_constraint = args.memory_constraint * 1024
+        self.memory_constraint = args.hardware_info.memory_constraint * 1024
         
     # =============== Setting Galvatron Search Engine Basic Information ===============
     def set_search_engine_info(self, path, model_layer_configs, model_name):
@@ -58,36 +52,33 @@ class GalvatronSearchEngine():
     def set_model_name(self, name):
         self.model_name = name
         
-    def memory_profiling_path(self):
+    def memory_profiling_path(self): # TODO: add split mode profile path
         if self.mem_path is not None:
             return self.mem_path
         assert self.model_name is not None, 'Should specify the model name!'
         args = self.args
-        memory_config_name = 'memory_profiling_%s_%s_all.json'%(args.mixed_precision, self.model_name) # TODO dynamic parse profile file
-        if args.memory_profiling_path is None:
+        memory_config_name = 'memory_profiling_%s_%s_all.json'%(args.parallelism_info.mixed_precision, self.model_name) # TODO: dynamic parse profile file
+        if args.profiling_info.memory_profiling_path is None:
             memory_config_path = os.path.join(self.path, 'configs')
         else:
-            memory_config_path = args.memory_profiling_path
+            memory_config_path = args.profiling_info.memory_profiling_path
         self.mem_path = os.path.join(memory_config_path, memory_config_name)
         return self.mem_path
     
-    def time_profiling_path(self):
+    def time_profiling_path(self): # TODO: add split mode profile path
         if self.time_path is not None:
             return self.time_path
         assert self.model_name is not None, 'Should specify the model name!'
         args = self.args
-        time_config_name = "computation_profiling_%s_%s_all.json"%(args.mixed_precision, self.model_name) # TODO dynamic parse profile file
-        if args.time_profiling_path is None:
+        time_config_name = "computation_profiling_%s_%s_all.json"%(args.parallelism_info.mixed_precision, self.model_name) # TODO: dynamic parse profile file
+        if args.profiling_info.time_profiling_path is None:
             self.time_path = os.path.join(self.path, "configs")
         else:
-            self.time_path = args.time_profiling_path
+            self.time_path = args.profiling_info.time_profiling_path
 
         self.time_path = os.path.join(self.time_path, time_config_name)
         return self.time_path
-    
-    def set_microbatch_func(self, microbatch_size, max_chunk):
-        self.optimal_chunk_func = lambda local_bsz, strategy: optimal_chunk_func_default(local_bsz, strategy, microbatch_size)
-    
+     
     def set_model_layer_configs(self, model_layer_configs):
         if model_layer_configs is None:
             return
@@ -95,16 +86,192 @@ class GalvatronSearchEngine():
         self.layernum_list = [config['layer_num'] for config in model_layer_configs]
         self.seqlen_list = [config['seq_len'] for config in model_layer_configs]
         self.num_layertype = len(self.layernum_list)
+        self.total_layernum = sum(self.layernum_list)
     
     # =============== Initializing Galvatron Search Engine ===============
     # Generating Strategies, Loading Profiled Memory & Time Config, Setting Memory & Time Cost Models
-    def initialize_search_engine(self):
-        self.generate_strategies()
+    def initialize_search_engine(self, show_all_strategy_list=False):
+        self.generate_strategy_list()
+        self.filter_strategy_list()
+        if show_all_strategy_list:
+            self.show_all_strategy_list()
+
         self.get_profiled_model_configs()
         self.get_profiled_hardware_configs()
         self.set_cost_models()
+
         self.show_search_info()
+
+    # =========================== Generating Strategy List ===========================
+    def generate_strategy_list(self) -> None:
+        print(f'{"="*25}Enter generate_strategy_list{"="*25}')
+
+        args = self.args
+        default_dp_type = args.parallelism_info.default_dp_type
+        max_pp_deg = args.search_space_info.max_pp_deg
+        max_tp_deg = args.search_space_info.max_tp_deg
+        max_sp_deg = args.search_space_info.max_sp_deg
+        max_cp_deg = args.search_space_info.max_cp_deg
+        world_size = self.world_size
+
+        degree_range = []
+        tmp = 1
+        while tmp <= self.world_size:
+            degree_range.append(tmp)
+            tmp *= 2
+
+        print(f'generate_strategy_list: world_size={world_size}, degree_range={degree_range}, max_pp_deg={max_pp_deg}, max_tp_deg={max_tp_deg}, max_sp_deg={max_sp_deg}, max_cp_deg={max_cp_deg}, default_dp_type={default_dp_type}')
+
+        attention_strategy_list:List[AttentionStrategy] = []
+        ffn_strategy_list:List[FFNStrategy] = []
+        embedding_lmhead_strategy_list:List[EmbeddingLMHeadStrategy] = []
+        layer_strategy_list:List[LayerStrategy] = []
+
+        # generate attention strategy list
+        for pp_size in degree_range:
+            if pp_size > self.total_layernum: # pp_size cannot be greater than total_layernum
+                continue
+            if pp_size > max_pp_deg:
+                continue
+            for tp_or_sp in ['tp', 'sp']:
+                for tp_sp_size in degree_range:
+                    if tp_or_sp == 'tp' and max_tp_deg != -1 and tp_sp_size > max_tp_deg:
+                        continue
+                    if tp_or_sp == 'sp' and max_sp_deg != -1 and tp_sp_size > max_sp_deg:
+                        continue
+                    if tp_sp_size * pp_size > world_size:
+                        continue
+                    for cp_size in degree_range:
+                        if max_cp_deg != -1 and cp_size > max_cp_deg:
+                            continue
+                        if pp_size * tp_sp_size * cp_size > world_size:
+                            continue
+                        dp_size = world_size // pp_size // tp_sp_size // cp_size
+                        dp_type_list = [DPType.DDP] if dp_size == 1 else ([DPType.DDP, DPType.ZERO3] if default_dp_type == 'ddp' else [DPType.ZERO2, DPType.ZERO3])
+                        for dp_type in dp_type_list:
+                            for checkpoint in [False, True]:
+                                tp_size = tp_sp_size if tp_or_sp == 'tp' else 1
+                                sp_size = tp_sp_size if tp_or_sp == 'sp' else 1
+                                strategy = AttentionStrategy(
+                                    pp_size=pp_size,
+                                    tp_size=tp_size,
+                                    sp_size=sp_size,
+                                    cp_size=cp_size,
+                                    dp_size=dp_size,
+                                    dp_type=dp_type,
+                                    checkpoint=checkpoint,
+                                )
+                                attention_strategy_list.append(strategy)
+        attention_strategy_list = sorted(list(set(attention_strategy_list)))
+
+        # generate ffn/embedding_lmhead/layer strategy list from attention strategy list
+        for strategy in attention_strategy_list:
+            ffn_strategy_list.append(strategy.to_ffn_strategy())
+            embedding_lmhead_strategy_list.append(strategy.to_embedding_lmhead_strategy())
+            layer_strategy_list.append(strategy.to_layer_strategy())
+        ffn_strategy_list = sorted(list(set(ffn_strategy_list)))
+        embedding_lmhead_strategy_list = sorted(list(set(embedding_lmhead_strategy_list)))
+        layer_strategy_list = sorted(list(set(layer_strategy_list)))
         
+        self.embedding_lmhead_strategy_list = embedding_lmhead_strategy_list
+        self.attention_strategy_list = attention_strategy_list
+        self.ffn_strategy_list = ffn_strategy_list
+        self.layer_strategy_list = layer_strategy_list
+
+        print(f'{"="*25}Exit generate_strategy_list{"="*25}')
+
+    def filter_strategy_list(self, disable_pp=None, disable_tp=None, disable_sp=None, disable_cp=None, disable_dp=None, disable_ckpt=None, disable_fsdp=None, disable_embedding_lmhead_tp=None, disable_embedding_lmhead_sp=None):
+        print(f'{"="*25}Enter filter_strategy_list{"="*25}')
+
+        args = self.args
+
+        params = {
+            "disable_pp": disable_pp,
+            "disable_tp": disable_tp,
+            "disable_sp": disable_sp,
+            "disable_cp": disable_cp,
+            "disable_dp": disable_dp,
+            "disable_ckpt": disable_ckpt,
+            "disable_fsdp": disable_fsdp,
+            "disable_embedding_lmhead_tp": disable_embedding_lmhead_tp,
+            "disable_embedding_lmhead_sp": disable_embedding_lmhead_sp
+        }
+        
+        disable_string = 'disbale'
+        search_space_info = args.search_space_info
+        for name, value in params.items():
+            if value is not None:
+                setattr(search_space_info, name, value)
+            if getattr(search_space_info, name) != 0:
+                name_remove_disable = name.replace('disable_', '')
+                disable_string += f'-{name_remove_disable}'
+        
+        print(f'filter_strategy_list: {disable_string}')
+
+        if args.search_space_info.disable_pp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.pp_size == 1]
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.pp_size == 1]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.pp_size == 1]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.pp_size == 1]
+        if args.search_space_info.disable_tp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.tp_size == 1]
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.tp_size == 1]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.tp_size == 1]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.tp_size == 1]
+        if args.search_space_info.disable_sp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.sp_size == 1]
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.sp_size == 1]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.sp_size == 1]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.sp_size == 1]
+        if args.search_space_info.disable_cp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.cp_size == 1]
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.cp_size == 1]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.cp_size == 1]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.cp_size == 1]
+        if args.search_space_info.disable_dp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.dp_size == 1]
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.dp_size == 1]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.dp_size == 1]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.dp_size == 1]
+        if args.search_space_info.disable_ckpt:
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.checkpoint == False]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.checkpoint == False]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.checkpoint == False]
+        if args.search_space_info.disable_fsdp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.dp_type != DPType.ZERO3]
+            self.attention_strategy_list = [strategy for strategy in self.attention_strategy_list if strategy.dp_type != DPType.ZERO3]
+            self.ffn_strategy_list = [strategy for strategy in self.ffn_strategy_list if strategy.dp_type != DPType.ZERO3]
+            self.layer_strategy_list = [strategy for strategy in self.layer_strategy_list if strategy.dp_type != DPType.ZERO3]
+        if args.search_space_info.disable_embedding_lmhead_tp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.tp_size == 1]
+        if args.search_space_info.disable_embedding_lmhead_sp:
+            self.embedding_lmhead_strategy_list = [strategy for strategy in self.embedding_lmhead_strategy_list if strategy.sp_size == 1]
+
+        self.embedding_lmhead_strategy_list = sorted(list(set(self.embedding_lmhead_strategy_list)))
+        self.attention_strategy_list = sorted(list(set(self.attention_strategy_list)))
+        self.ffn_strategy_list = sorted(list(set(self.ffn_strategy_list)))
+        self.layer_strategy_list = sorted(list(set(self.layer_strategy_list)))
+
+        print(f'{"="*25}Exit filter_strategy_list{"="*25}')
+
+    def show_all_strategy_list(self):
+        print(f'{"="*25}Enter show_all_strategy_list{"="*25}')
+
+        print(f'attention_strategy_list.size:{len(self.attention_strategy_list)}')
+        print(f'ffn_strategy_list.size:{len(self.ffn_strategy_list)}')
+        print(f'embedding_lmhead_strategy_list.size:{len(self.embedding_lmhead_strategy_list)}')
+        print(f'layer_strategy_list.size:{len(self.layer_strategy_list)}')
+
+        print()
+
+        print(f'attention_strategy_list:\n{pretty_repr(self.attention_strategy_list, max_width=1024)}')
+        print(f'ffn_strategy_list:\n{pretty_repr(self.ffn_strategy_list, max_width=1024)}')
+        print(f'embedding_lmhead_strategy_list:\n{pretty_repr(self.embedding_lmhead_strategy_list, max_width=1024)}')
+        print(f'layer_strategy_list:\n{pretty_repr(self.layer_strategy_list, max_width=1024)}')
+
+        print(f'{"="*25}Exit show_all_strategy_list{"="*25}')
+
+    # =========================== Parsing Profiled Configurations ===========================
     def convert_keys_to_int(self, d):
         if isinstance(d, dict):
             new_dict = {}
@@ -116,11 +283,11 @@ class GalvatronSearchEngine():
             return new_dict
         return d
     
-    def get_profiled_model_configs(self):
+    def get_profiled_model_configs(self): # TODO: add split mode profile configs
         self.time_config = read_json_config(self.time_profiling_path())
         self.memory_config = read_json_config(self.memory_profiling_path())
         self.memory_config = self.convert_keys_to_int(self.memory_config)
-        if self.args.time_profile_mode=='static':
+        if self.args.profiling_info.time_profile_mode=='static':
             self.time_profiled_list = []
             self.other_time_profiled_list = []
             for i in range(self.num_layertype):
@@ -129,7 +296,7 @@ class GalvatronSearchEngine():
                         self.time_profiled_list.append(t)
                     if s.startswith('layertype_other_'):
                         self.other_time_profiled_list.append(t)
-        elif self.args.time_profile_mode == "batch":
+        elif self.args.profiling_info.time_profile_mode == "batch":
             self.time_profiled_list = []
             for i in range(self.num_layertype):
                 x_data = []
@@ -161,7 +328,7 @@ class GalvatronSearchEngine():
                 
                 print("Fitted parameters other:", popt)
                 self.other_time_profiled_list.append(popt)
-        elif self.args.time_profile_mode == "sequence":
+        elif self.args.profiling_info.time_profile_mode == "sequence":
             self.time_profiled_list = []
             for i in range(self.num_layertype):
                 x_data = []
@@ -194,9 +361,9 @@ class GalvatronSearchEngine():
                 self.other_time_profiled_list.append(linear_func(self.seqlen_list[i],*popt))
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
-        if self.args.memory_profile_mode == "sequence":
+        if self.args.profiling_info.memory_profile_mode == "sequence":
 
-            assert self.args.sequence_parallel, "Sequence parallel is required for sequence memory profiling."
+            assert self.args.common_train_info.sequence_parallel, "Sequence parallel is required for sequence memory profiling."
             assert self.num_layertype == 1, "Only support num(layertype) == 1 for sequence memory profiling."
             maxseq_list = []
             for i in range(self.num_layertype):
@@ -221,8 +388,8 @@ class GalvatronSearchEngine():
                 self.other_memory_pp_off['activation'][tp] = self.other_memory_pp_off['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # TODO: reasonable scaling when len(seqlen_list) > 1
                 self.other_memory_pp_on['first_stage']['activation'][tp] = self.other_memory_pp_on['first_stage']['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # first stage is not scaled
                 self.other_memory_pp_on['last_stage']['activation'][tp] = self.other_memory_pp_on['last_stage']['activation'][tp] / maxseq_list[-1] * self.seqlen_list[-1] # last stage is scaled
-        elif self.args.memory_profile_mode == "static":
-            if self.args.sequence_parallel:
+        elif self.args.profiling_info.memory_profile_mode == "static":
+            if self.args.common_train_info.sequence_parallel:
                 for i in range(self.num_layertype):
                     layer_mem_config = self.memory_config['layertype_%d_sp'%i]
                     parameter_size = layer_mem_config[self.seqlen_list[i]]['parameter_size']
@@ -251,46 +418,50 @@ class GalvatronSearchEngine():
         
     def get_profiled_hardware_configs(self):
         args = self.args
-        if args.allreduce_bandwidth_config_path is None:
+        if args.profiling_info.allreduce_bandwidth_config_path is None:
             hardware_configs_dir = '../../profile_hardware/hardware_configs/'
             allreduce_bandwidth_config_path = os.path.join(self.path, hardware_configs_dir)
         else:
-            allreduce_bandwidth_config_path = args.allreduce_bandwidth_config_path
-        allreduce_bandwidth_config_name = 'allreduce_bandwidth_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
-        args.allreduce_bandwidth_config_path  = os.path.join(allreduce_bandwidth_config_path, allreduce_bandwidth_config_name)
-        self.allreduce_bandwidth, self.allreduce_comm_coe = read_allreduce_bandwidth_config(args.allreduce_bandwidth_config_path, gpu_num=args.gpu_num)
+            allreduce_bandwidth_config_path = args.profiling_info.allreduce_bandwidth_config_path
+        allreduce_bandwidth_config_name = 'allreduce_bandwidth_%dnodes_%dgpus_per_node.json'%(args.hardware_info.num_nodes, args.hardware_info.num_gpus_per_node)
+        args.profiling_info.allreduce_bandwidth_config_path  = os.path.join(allreduce_bandwidth_config_path, allreduce_bandwidth_config_name)
+        self.allreduce_bandwidth, self.allreduce_comm_coe = read_allreduce_bandwidth_config(args.profiling_info.allreduce_bandwidth_config_path, gpu_num=self.world_size)
         
-        if args.p2p_bandwidth_config_path is None:
+        if args.profiling_info.p2p_bandwidth_config_path is None:
             hardware_configs_dir = '../../profile_hardware/hardware_configs/'
             p2p_bandwidth_config_path = os.path.join(self.path, hardware_configs_dir)
         else:
-            p2p_bandwidth_config_path = args.p2p_bandwidth_config_path
-        p2p_bandwidth_config_name = 'p2p_bandwidth_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
-        args.p2p_bandwidth_config_path  = os.path.join(p2p_bandwidth_config_path, p2p_bandwidth_config_name)
-        self.p2p_bandwidth, self.p2p_comm_coe = read_p2p_bandwidth_config(args.p2p_bandwidth_config_path)
+            p2p_bandwidth_config_path = args.profiling_info.p2p_bandwidth_config_path
+        p2p_bandwidth_config_name = 'p2p_bandwidth_%dnodes_%dgpus_per_node.json'%(args.hardware_info.num_nodes, args.hardware_info.num_gpus_per_node)
+        args.profiling_info.p2p_bandwidth_config_path  = os.path.join(p2p_bandwidth_config_path, p2p_bandwidth_config_name)
+        self.p2p_bandwidth, self.p2p_comm_coe = read_p2p_bandwidth_config(args.profiling_info.p2p_bandwidth_config_path)
         
-        if args.overlap_coe_path is None:
+        if args.profiling_info.overlap_coe_path is None:
             hardware_configs_dir = '../../profile_hardware/hardware_configs/'
             overlap_coe_path = os.path.join(self.path, hardware_configs_dir)
         else:
-            overlap_coe_path = args.overlap_coe_path
+            overlap_coe_path = args.profiling_info.overlap_coe_path
         overlap_coe_name = 'overlap_coefficient.json'
-        args.overlap_coe_path = os.path.join(overlap_coe_path, overlap_coe_name)
-        self.overlap_coe = read_json_config(args.overlap_coe_path)['overlap_coe']
-        if args.sp_time_path is None:
+        args.profiling_info.overlap_coe_path = os.path.join(overlap_coe_path, overlap_coe_name)
+        self.overlap_coe = read_json_config(args.profiling_info.overlap_coe_path)['overlap_coe']
+        if args.profiling_info.sp_time_path is None:
             hardware_configs_dir = '../../profile_hardware/hardware_configs/'
             sp_time_path = os.path.join(self.path, hardware_configs_dir)
         else:
-            sp_time_path = args.sp_time_path
-        sp_time_config_name = 'sp_time_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
-        args.sp_time_path = os.path.join(sp_time_path, sp_time_config_name)
-        sp_config = read_json_config(args.sp_time_path)
+            sp_time_path = args.profiling_info.sp_time_path
+        sp_time_config_name = 'sp_time_%dnodes_%dgpus_per_node.json'%(args.hardware_info.num_nodes, args.hardware_info.num_gpus_per_node)
+        args.profiling_info.sp_time_path = os.path.join(sp_time_path, sp_time_config_name)
+        sp_config = read_json_config(args.profiling_info.sp_time_path)
         self.sp_allreduce = remap_config(sp_config, "allreduce")
         self.sp_all2all = remap_config(sp_config, "all2all")
 
+        self.allreduce_message_size_to_latency_dict_dict = remap_config_for_latency(sp_config, "allreduce")
+        self.allgather_message_size_to_latency_dict_dict = remap_config_for_latency(sp_config, "allgather")
+        self.all2all_message_size_to_latency_dict_dict = remap_config_for_latency(sp_config, "all2all")
+
         return self.allreduce_bandwidth, self.p2p_bandwidth, self.overlap_coe, self.sp_allreduce, self.sp_all2all
 
-    def set_cost_models(self):
+    def set_cost_models(self): # TODO: add split mode cost models
         self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list = [], [], [], [], []
         for i in range(self.num_layertype):
             model_args = ModelArgs(
@@ -300,16 +471,13 @@ class GalvatronSearchEngine():
                 layer_num=self.layernum_list[i],
             )
             train_args = TrainArgs(
-                mixed_precision=False if self.args.mixed_precision == 'fp32' else True,
-                async_grad_reduce=self.args.async_grad_reduce,
+                mixed_precision=False if self.args.parallelism_info.mixed_precision == 'fp32' else True,
+                async_grad_reduce=self.args.parallelism_info.async_grad_reduce,
             )
             parallel_args = ParallelArgs(
-                use_zero2_for_dp=True if self.args.default_dp_type == 'zero2' else False,
-                disable_vtp=self.args.disable_vtp,
-                sequence_parallel=self.args.sequence_parallel,
-                sp_space=self.args.sp_space,
-                pipeline_type=self.args.pipeline_type,
-                optimal_chunk_func=self.optimal_chunk_func,
+                use_zero2_for_dp=True if self.args.parallelism_info.default_dp_type == 'zero2' else False,
+                sequence_parallel=self.args.common_train_info.sequence_parallel,
+                pipeline_type=self.args.parallelism_info.pipeline_type,
             )
             profile_model_args = ProfileModelArgs(
                 tp_activation_per_bsz_dict=self.act_sizes[i],
@@ -325,9 +493,14 @@ class GalvatronSearchEngine():
                 dp_overlap_coe=self.overlap_coe,
                 bct_overlap_coe=self.overlap_coe,
                 p2p_comm_coe_dict=self.p2p_comm_coe,
-                costmodel_coe=self.args.costmodel_coe,
+                costmodel_coe=self.args.debug_info.debug_costmodel_coe,
                 allreduce_dict=self.sp_allreduce,
                 all2all_dict=self.sp_all2all,
+                overlap_slowdown_coe=self.overlap_coe,
+                allreduce_latency_per_MB_dict=self.allreduce_comm_coe,
+                allreduce_message_size_to_latency_dict_dict=self.allreduce_message_size_to_latency_dict_dict,
+                allgather_message_size_to_latency_dict_dict=self.allgather_message_size_to_latency_dict_dict,
+                all2all_message_size_to_latency_dict_dict=self.all2all_message_size_to_latency_dict_dict,
             )
             self.model_args_list.append(model_args)
             self.train_args_list.append(train_args)
@@ -336,198 +509,132 @@ class GalvatronSearchEngine():
             self.profile_hardware_args_list.append(profile_hardware_args)
     
     # =============== For Galvatron Search Engine Parallelism Optimization ===============
+    def get_pp_size_range(self) -> None:
+        self.pp_size_range = []
+        assert hasattr(self, 'embedding_lmhead_strategy_list'), f"{ColorSet.RED}[ERROR] [{self.__class__.__name__}] embedding_lmhead_strategy_list is not set.{ColorSet.RESET}"
+        for strategy in self.embedding_lmhead_strategy_list:
+            self.pp_size_range.append(strategy.pp_size)
+        self.pp_size_range = sorted(list(set(self.pp_size_range)))
+        print(f'pp size range: {self.pp_size_range}')
+
     def parallelism_optimization(self):
         print('='*25, 'Galvatron Search Engine Start Searching','='*25)
-        self.set_searching_bsz()
-        
         print('-----', '[Searching Memory Info]', 'Memory constraint:', self.memory_constraint, 'MB', '-----')
+        
+        # [Step 1] Preparation Works
         results = dict()
-        self.search_history = dict()
-        temp_strategies = copy.deepcopy(self.strategies)
-        max_throughput, optimal_bsz, max_bsz = -1, -1, -1
-        
-        total_min_tp = []
-        i = 1
-        while i<=self.args.gpu_num and i <= self.args.max_tp_deg:
-            total_min_tp.append(i)
-            i *= 2
-        if self.args.disable_vtp:
-            total_min_tp = [1]
-        if not self.args.global_memory_buffer:
-            total_max_tp = [self.args.max_tp_deg]
-            sp_search_speace = [1, 3]
-        else:
-            total_max_tp = total_min_tp
-            sp_search_speace = [1, 2, 3] # 1 tp, 2 sp, 3 tp+sp
-        
-        if self.args.sp_space == 'tp+sp':
-            total_vsp = [0, 1]
-        elif self.args.sp_space == 'tp':
-            total_vsp = [0]
-            sp_search_speace = [1]
-        elif self.args.sp_space == 'sp':
-            assert False,"Only sp mode unsupport now."
-            total_vsp = [1]
-            sp_search_speace = [2]
+        self.get_pp_size_range()
+        self.tp_sp_mode_space = ['tp_only', 'sp_only', 'tp_with_sp']
+        self.set_searching_bsz()
 
-        if self.args.disable_sdp:
-            total_vocab_sdp = [0]
-        else:
-            total_vocab_sdp = [0, 1]
-
-        def search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp):
-            log_dir = self.args.log_dir + '/%s_%dnodes_%dgpus_%dGB'%(self.model_name, self.args.num_nodes, self.args.num_gpus_per_node, self.memory_constraint//1024)
-            log_dir = ensure_log_dir(log_dir)
-            logger = get_thread_logger(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp, log_dir)
-            logger.info(f"Starting search for bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, vocab_sdp={vocab_sdp}")
-
-            results = dict()
+        # [Step 2] Get all possible
+        all_tasks = []
+        for gbsz in self.BSZs:
+            results[gbsz] = dict()
+            chunk_list = range(1, gbsz+1)
+            if self.args.batch_size_info.settle_chunk != -1:
+                chunk_list = [self.args.batch_size_info.settle_chunk]
             
-            for sp_search in sp_search_speace:
-                if sp_search == 1 and vsp == 1:
+            for chunks in chunk_list:
+                if gbsz % chunks != 0:
                     continue
-                if sp_search == 2 and vsp == 0:
-                    continue
-        
-                strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
-                strategies = [s for s in strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
-                if sp_search == 1:
-                    strategies = [s for s in strategies if 'sp' not in s[-1] or ('sp' in s[-1] and s[-1]['sp'] == 0)]
-                if sp_search == 2:
-                    strategies = [s for s in strategies if 'sp' not in s[-1] or ('sp' in s[-1] and s[-1]['sp'] == 1)]
-                if len(strategies) == 0:
-                    continue
-                
-                pp_deg_list = sorted(list(set([s[0] for s in strategies])))
-                
-                pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
-                
-                if len(pp_deg_list) == 0:
-                    continue
-                
-                strategies = [s for s in strategies if s[0] in pp_deg_list]
-                
-                mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
-                for pp in pp_deg_list:
-                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
-                
-                # strict mode: search chunk must be equal to real chunk 
-                strategies = [s for s in strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
-                
-                if len(strategies) == 0:
-                    continue
+                results[gbsz][chunks] = dict()
 
-                pp_stage_dict = get_pp_stage_for_bsz(strategies, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.layernum_list, bsz, mbsz_dict)
-                
-                results[sp_search] = self.dynamic_programming(strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, vocab_sdp, sp_search, logger)
-                results[sp_search]['pp_stage_dict'] = copy.deepcopy(pp_stage_dict)
-                # min_res_list, min_pp_deg, throughput = results[min_tp][max_tp][vsp][sp_search]['min_res_list'], results[min_tp][max_tp][vsp][sp_search]['min_pp_deg'], results[min_tp][max_tp][vsp][sp_search]['throughput']
-            return results
-        
-        if self.args.parallel_search:
+                for pp_size in self.pp_size_range:
+                    if pp_size > chunks:
+                        print(f'pp_size({pp_size}) > chunks({chunks}), skip')
+                        continue
+                    if pp_size > self.total_layernum:
+                        print(f'pp_size({pp_size}) > total_layernum({self.total_layernum}), skip')
+                        continue
+                    results[gbsz][chunks][pp_size] = dict()
+
+                    theoretical_max_tp_size = self.world_size // pp_size
+                    theoretical_max_tp_size = max(theoretical_max_tp_size, 1)
+                    if self.args.search_space_info.max_tp_deg != -1 and theoretical_max_tp_size > self.args.search_space_info.max_tp_deg:
+                        theoretical_max_tp_size = self.args.search_space_info.max_tp_deg
+
+                    theoretical_max_dp_size = min(gbsz // chunks, self.world_size // pp_size)
+                    theoretical_max_dp_size = max(theoretical_max_dp_size, 1)
+                    theoretical_min_tp_size = self.world_size // pp_size // theoretical_max_dp_size
+                    theoretical_min_tp_size = max(theoretical_min_tp_size, 1)
+
+                    for tp_sp_mode in self.tp_sp_mode_space:
+                        results[gbsz][chunks][pp_size][tp_sp_mode] = dict()
+                        
+                        if tp_sp_mode == 'sp_only':
+                            consider_max_tp_size_list = [theoretical_max_tp_size]
+                        else:
+                            consider_max_tp_size_list = []
+                            for i in range(theoretical_min_tp_size, theoretical_max_tp_size + 1):
+                                if is_power_of_two(i) and i * pp_size <= self.world_size:
+                                    consider_max_tp_size_list.append(i)
+                        
+                        for global_buffer_tp_size in consider_max_tp_size_list:
+                            results[gbsz][chunks][pp_size][tp_sp_mode][global_buffer_tp_size] = dict()
+                            all_tasks.append((gbsz, chunks, pp_size, tp_sp_mode, global_buffer_tp_size))
+
+        # [Step 3] Search
+        print(f'self.args.options_info.parallel_search: {self.args.options_info.parallel_search}')
+        if self.args.options_info.parallel_search:
             import concurrent.futures
             import threading
-            import time
-    
-            all_tasks = []
-            for bsz in self.BSZs:
-                results[bsz] = dict()
-                chunk_list = range(1, bsz+1)
-                if self.args.settle_chunk != -1:
-                    chunk_list = [self.args.settle_chunk]
-                
-                for chunk in chunk_list:
-                    if bsz % chunk != 0:
-                        continue
-                    results[bsz][chunk] = dict()
-                    for min_tp in total_min_tp:
-                        results[bsz][chunk][min_tp] = dict()
-                        for max_tp in total_max_tp:
-                            if min_tp > max_tp:
-                                continue
-                            results[bsz][chunk][min_tp][max_tp] = dict()
-                            for vsp in total_vsp:
-                                results[bsz][chunk][min_tp][max_tp][vsp] = dict()
-                                for vocab_sdp in total_vocab_sdp:
-                                    results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp] = dict()
-                                    all_tasks.append((bsz, chunk, min_tp, max_tp, vsp, vocab_sdp))
+            import multiprocessing
             
             results_lock = threading.Lock()
-
-
-            import multiprocessing
-            if hasattr(self.args, 'worker') and self.args.worker > 0:
-                num_threads = min(self.args.worker, len(all_tasks))
+            if hasattr(self.args, 'worker') and self.args.options_info.worker > 0:
+                num_threads = min(self.args.options_info.worker, len(all_tasks))
             else:
                 num_threads = min(multiprocessing.cpu_count() * 2, len(all_tasks))
             print(f"Starting parallel search with {num_threads} threads for {len(all_tasks)} tasks...")
             
-            def process_task(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp):
+            def process_task(gbsz, chunks, pp_size, tp_sp_mode, global_buffer_tp_size):
                 thread_id = threading.get_ident() % 1000
-                print(f"[Thread {thread_id:03d}] Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, vocab_sdp={vocab_sdp}", flush=True)
-
-                chunk_results = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp)
+                print(f"[Thread {thread_id:03d}] Start processing: gbsz={gbsz}, chunks={chunks}, pp_size={pp_size}, tp_sp_mode={tp_sp_mode}, global_buffer_tp_size={global_buffer_tp_size}", flush=True)
+                try:
+                    chunk_results = self.search_for_single_task(gbsz, chunks, pp_size, global_buffer_tp_size, tp_sp_mode)
+                except Exception as e:
+                    print(f"[Thread {thread_id:03d}] Task failed (gbsz={gbsz}, chunks={chunks}, pp_size={pp_size}, tp_sp_mode={tp_sp_mode}, global_buffer_tp_size={global_buffer_tp_size}): {e}")
+                    raise e
                 with results_lock:
-                    results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp] = copy.deepcopy(chunk_results)
+                    results[gbsz][chunks][pp_size][tp_sp_mode][global_buffer_tp_size] = copy.deepcopy(chunk_results)
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = [executor.submit(process_task, bsz, chunk, min_tp, max_tp, vsp, vocab_sdp) for bsz, chunk, min_tp, max_tp, vsp, vocab_sdp in all_tasks]
+                futures = [executor.submit(process_task, gbsz, chunks, pp_size, tp_sp_mode, global_buffer_tp_size) for gbsz, chunks, pp_size, tp_sp_mode, global_buffer_tp_size in all_tasks]
                 concurrent.futures.wait(futures)
         else:
-            for bsz in self.BSZs:
-                results[bsz] = dict()
-                chunk_list = range(1,bsz+1)
-                # assert(bsz % self.args.gpu_num == 0), "bdz should be divisible by world size"
-                if self.args.settle_chunk != -1:
-                    chunk_list = [self.args.settle_chunk]
-                for chunk in chunk_list:
-                    results[bsz][chunk] = dict()
-                    if bsz % chunk != 0:
-                        continue
-                    for min_tp in total_min_tp:
-                        results[bsz][chunk][min_tp] = dict()
-                        for max_tp in total_max_tp:
-                            if min_tp > max_tp:
-                                continue
-                            results[bsz][chunk][min_tp][max_tp] = dict()
-                            for vsp in total_vsp:
-                                results[bsz][chunk][min_tp][max_tp][vsp] = dict()
-                                for vocab_sdp in total_vocab_sdp:
-                                    print(f"Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, vocab_sdp={vocab_sdp}", flush=True)
-
-                                    results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp] = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, vocab_sdp)
-
+            print(f"Starting sequential search with {len(all_tasks)} tasks...")
+            for task_idx, task in enumerate(all_tasks):
+                gbsz, chunks, pp_size, tp_sp_mode, global_buffer_tp_size = task
+                print(f"Start processing: {task_idx}-th task, gbsz={gbsz}, chunks={chunks}, pp_size={pp_size}, tp_sp_mode={tp_sp_mode}, global_buffer_tp_size={global_buffer_tp_size}", flush=True)
+                results[gbsz][chunks][pp_size][tp_sp_mode][global_buffer_tp_size] = self.search_for_single_task(gbsz, chunks, pp_size, global_buffer_tp_size, tp_sp_mode)
+        
+        # [Step 4] Select the optimal solution and save results
+        max_throughput, optimal_bsz = -1, -1
         for bsz in results:
             for chunk in results[bsz]:
-                for min_tp in results[bsz][chunk]:
-                    for max_tp in results[bsz][chunk][min_tp]:
-                        for vsp in results[bsz][chunk][min_tp][max_tp]:
-                            for vocab_sdp in results[bsz][chunk][min_tp][max_tp][vsp]:
-                                for sp_search in results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp]:
-                                    throughput = results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp][sp_search]['throughput']
-                                    pp_stage_dict = results[bsz][chunk][min_tp][max_tp][vsp][vocab_sdp][sp_search]['pp_stage_dict']
-                                    if throughput > max_throughput:
-                                        max_throughput = throughput
-                                        optimal_bsz = bsz
-                                        optimal_chunk = chunk
-                                        optimal_min_tp = min_tp
-                                        optimal_max_tp = max_tp
-                                        optimal_vsp = vsp
-                                        optimal_vocab_sdp = vocab_sdp
-                                        optimal_sp_search = sp_search
-                                        optimal_pp_stage_dict = pp_stage_dict
+                for pp_size in results[bsz][chunk]:
+                    for tp_sp_mode in results[bsz][chunk][pp_size]:
+                        for global_buffer_tp_size in results[bsz][chunk][pp_size][tp_sp_mode]:
+                            throughput = results[bsz][chunk][pp_size][tp_sp_mode][global_buffer_tp_size]['throughput']
+                            if throughput > max_throughput:
+                                max_throughput = throughput
+                                optimal_bsz = bsz
+                                optimal_chunk = chunk
+                                optimal_pp_size = pp_size
+                                optimal_global_buffer_tp_size = global_buffer_tp_size
+                                optimal_tp_sp_mode = tp_sp_mode
 
         if max_throughput > 0:
             print('\nFinal results of max memory %d MB:'%self.memory_constraint)
-            re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_vocab_sdp][optimal_sp_search]
-            re['vsp'] = optimal_vsp
-            re['vocab_sdp'] = optimal_vocab_sdp
-            print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Optimal embed sdp = {optimal_vocab_sdp} Max throughput={re['throughput']} samples/s")
-            print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
-            print(f"Min_tp={optimal_min_tp} Max_tp={optimal_max_tp} ")
-            print_strategies(re['min_res_list'])
+            optimal = results[optimal_bsz][optimal_chunk][optimal_pp_size][optimal_tp_sp_mode][optimal_global_buffer_tp_size]
             
-            self.save_results(re, optimal_bsz, optimal_chunk, optimal_pp_stage_dict)
+            print(f'Optimal gbsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal pp_size = {optimal_pp_size} Optimal tp_sp_mode = {optimal_tp_sp_mode} Optimal global_buffer_tp_size = {optimal_global_buffer_tp_size}')
+            print(f"Minized timecost = {optimal['time_cost']} Memory remaining = {optimal['memory_remain']} Memory cost = {optimal['memory_cost']}")
+            print(f"Embedding LMHead tp_sp_size = {optimal['embedding_lmhead_tp_sp_size']} Embedding LMHead sp = {optimal['embedding_lmhead_sp']} Embedding LMHead sdp = {optimal['embedding_lmhead_sdp']}")
+            print_strategy_list(optimal['strategy_list'])
+
+            self.save_results(optimal, optimal_bsz, optimal_chunk)
         else:
             print("No valid configuration found.")
         
@@ -536,394 +643,269 @@ class GalvatronSearchEngine():
 
         return max_throughput
 
-    def set_searching_bsz(self):
+    def search_for_single_task(self, gbsz, chunks, pp_size, global_buffer_tp_size, tp_sp_mode) -> dict[str, Any]:
         args = self.args
-        # Set Searching BSZs
-        if args.settle_bsz is not None and args.settle_bsz > 0:
-            self.min_bsz = self.max_bsz = args.settle_bsz
-            self.bsz_scale = 0
-            self.BSZs = [args.settle_bsz]
-            print('-----', '[Searching Batch Sizes Info]', 'Settle bsz:', args.settle_bsz, '-----')
-            return
-        self.bsz_scale = args.bsz_scale
 
-        if args.recommend_min_bsz:
-            recommend_bsz = self.recommend_min_bsz(self.bsz_scale)
-            args.min_bsz = recommend_bsz if recommend_bsz > 0 else args.min_bsz
+        # [Step 1] log initialization
+        log_dir = self.args.options_info.log_dir + '/%s_%dnodes_%dgpus_%dGB'%(self.model_name, self.args.hardware_info.num_nodes, self.args.hardware_info.num_gpus_per_node, self.memory_constraint//1024)
+        log_dir = ensure_log_dir(log_dir)
+        logger = get_thread_logger_single_task(gbsz, chunks, pp_size, global_buffer_tp_size, tp_sp_mode, log_dir)
+        logger.info(f"Starting search for gbsz={gbsz}, chunks={chunks}, pp_size={pp_size}, global_buffer_tp_size={global_buffer_tp_size}, tp_sp_mode={tp_sp_mode}")
+
+        # [Step 2] filter strategies
+        theoretical_max_dp_size = min(gbsz // chunks, self.world_size // pp_size)
+        theoretical_max_dp_size = max(theoretical_max_dp_size, 1)
         
-        self.min_bsz = max(args.min_bsz, self.bsz_scale)
-        self.min_bsz = self.min_bsz // self.bsz_scale * self.bsz_scale
-        self.max_bsz = int(np.ceil(args.max_bsz / self.bsz_scale) * self.bsz_scale) if args.max_bsz % self.bsz_scale else (args.max_bsz+self.bsz_scale)
-        self.BSZs = list(range(self.min_bsz, self.max_bsz, self.bsz_scale))
-        self.max_bsz = self.BSZs[-1]
-        print('-----', '[Searching Batch Sizes Info]', 'Min bsz:', self.min_bsz, 'Max bsz:', self.max_bsz, 'bsz_scale:', self.bsz_scale, '-----')
-
-    def recommend_min_bsz(self, scale):
-        prune_percent = 0.65
-        args = self.args
-        gpu_num = args.gpu_num
-        if not args.search_space in ['full', 'dp+pp', 'dp+tp']:
-            return -1
-        baselines = []
-        if not args.disable_dp:
-            baselines.append([1,1,gpu_num,{'fsdp':0}])
-        if not args.disable_sdp:
-            baselines.append([1,1,gpu_num,{'fsdp':1}])
-        if not args.disable_tp:
-            baselines.append([1,gpu_num,1,{'fsdp':0}])
-        max_bsz_baselines = [self.estimate_strategy_max_bsz([s], scale) for s in baselines]
-        # print(max_bsz_baselines)
-        max_bsz, min_bsz = np.max(max_bsz_baselines), np.min(max_bsz_baselines)
-        bsz_start = int((min_bsz*(1-prune_percent)+max_bsz*prune_percent)//scale*scale)
-        bsz_start = bsz_start if bsz_start > scale else scale
-        return bsz_start
-
-    def estimate_strategy_max_bsz(self, strategies, scale):
-        max_bsz = 0
-        bsz = scale
-        while True:
-            pp_stage_dict = get_pp_stage_for_bsz(strategies, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.layernum_list, bsz)
-            dp_on_model = DpOnModel(strategies, MemoryCostModel, TimeCostModel, 
-                                    model_args_list=self.model_args_list, train_args_list=self.train_args_list,
-                                    parallel_args_list=self.parallel_args_list, profile_model_args_list=self.profile_model_args_list,
-                                    profile_hardware_args_list=self.profile_hardware_args_list,
-                                    max_mem=self.memory_constraint, layer_num=self.layernum_list, sequence_len = self.seqlen_list, 
-                                    multi_layer_type = True, pp_stage_dict = pp_stage_dict,
-                                    comm_coe_dict=self.allreduce_comm_coe, gpu_num=self.args.gpu_num,
-                                    config = self.args)
-            min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, 1, 1, 0, 1, print_=False, mbsz_dict = {1:bsz})
-            if min_pp_deg == -1:
-                max_bsz = bsz - scale
-                break
-            bsz += scale
-        return max_bsz
-
-    def dynamic_programming(self, strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, vocab_sdp, sp_search, logger):
-        args = self.args
-        logger.info(f'bsz={bsz} {pp_stage_dict}')
-        dp_on_model = DpOnModel(strategies, 
-                                MemoryCostModel, 
-                                TimeCostModel, 
-                                model_args_list=self.model_args_list,
-                                train_args_list=self.train_args_list,
-                                parallel_args_list=self.parallel_args_list,
-                                profile_model_args_list=self.profile_model_args_list,
-                                profile_hardware_args_list=self.profile_hardware_args_list,
-                                max_mem=self.memory_constraint,
-                                layer_num=self.layernum_list,
-                                sequence_len = self.seqlen_list,
-                                multi_layer_type = True,
-                                pp_stage_dict = pp_stage_dict,
-                                search_history=self.search_history,
-                                comm_coe_dict=self.allreduce_comm_coe,
-                                gpu_num=args.gpu_num,
-                                model_microbatch_after_dp=args.use_pipeline_costmodel,
-                                pipeline_type=args.pipeline_type,
-                                config = self.args,
-                                logger=logger)
+        def filter_strategies_for_single_task(original_strategy_list:Union[List[LayerStrategy], List[EmbeddingLMHeadStrategy]], pp_size, max_tp_size, max_dp_size, tp_sp_mode):
+            strategy_list:List[Union[LayerStrategy, EmbeddingLMHeadStrategy]] = [strategy for strategy in original_strategy_list if strategy.pp_size == pp_size]
+            strategy_list = [strategy for strategy in strategy_list if strategy.tp_sp_size <= max_tp_size] 
+            strategy_list = [strategy for strategy in strategy_list if strategy.dp_size <= max_dp_size]
+            if tp_sp_mode == 'tp_only':
+                strategy_list = [strategy for strategy in strategy_list if strategy.sp_size == 1]
+            elif tp_sp_mode == 'sp_only':
+                strategy_list = [strategy for strategy in strategy_list if strategy.tp_size == 1]
+            elif tp_sp_mode == 'tp_with_sp':
+                pass
+            return strategy_list
         
-        logger.info(f"****Searching with bsz={bsz} chunk={chunk} min_tp={min_tp} max_tp={max_tp} vsp={vsp} vocab_sdp={vocab_sdp} sp_search={sp_search}****")
-        chunk_dict = check_optimal_chunks(args.gpu_num, strategies, self.optimal_chunk_func, bsz, mbsz_dict, min_tp)
-        logger.info(f'Chunk_dict for bsz {bsz}: {chunk_dict}')
-        logger.info(f'Mbsz_dict for bsz {bsz}: {mbsz_dict}')
+        filter_layer_strategy_list = filter_strategies_for_single_task(self.layer_strategy_list, pp_size, global_buffer_tp_size, theoretical_max_dp_size, tp_sp_mode)
+        filter_embedding_lmhead_strategy_list = filter_strategies_for_single_task(self.embedding_lmhead_strategy_list, pp_size, global_buffer_tp_size, theoretical_max_dp_size, tp_sp_mode)
+        if len(filter_layer_strategy_list) == 0 or len(filter_embedding_lmhead_strategy_list) == 0:
+            logger.info(f"No strategies found for gbsz={gbsz}, chunks={chunks}, pp_size={pp_size}, global_buffer_tp_size={global_buffer_tp_size}, tp_sp_mode={tp_sp_mode}")
+            return {'throughput': -1}
+
+        # [Step 3] get pp_stage_list # TODO: Consider a more flexible splitting method.
+        pp_stage_list = pp_division_even(self.layernum_list, pp_size) # List[int]
+
+        # [Step 4] dynamic programming
+        dp_on_model = DpOnModel(
+            model_args_list=self.model_args_list,
+            train_args_list=self.train_args_list,
+            parallel_args_list=self.parallel_args_list,
+            profile_model_args_list=self.profile_model_args_list,
+            profile_hardware_args_list=self.profile_hardware_args_list,
+            max_mem=self.memory_constraint,
+            layer_num=self.layernum_list,
+            sequence_len = self.seqlen_list,
+            comm_coe_dict=self.allreduce_comm_coe,
+            world_size=self.world_size,
+            pipeline_type=args.parallelism_info.pipeline_type,
+            config = self.args,
+            logger=logger
+        )
         
-        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, vsp, vocab_sdp, sp_search, mbsz_dict = mbsz_dict)
-        throughput = bsz / min_cost
-        logger.info(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Vocab tp={min_vtp}")
+        optimal = dp_on_model.fit(
+            gbsz=gbsz, 
+            chunks=chunks, 
+            pp_size=pp_size,
+            pp_stage_list=pp_stage_list,
+            global_buffer_tp_size=global_buffer_tp_size, 
+            tp_sp_mode=tp_sp_mode,
+            layer_strategy_list=filter_layer_strategy_list,
+            embedding_lmhead_strategy_list=filter_embedding_lmhead_strategy_list
+        )
+
+        # [Step 5] gather info
+        throughput = gbsz / optimal['time_cost'] # if no solution, optimal['time_cost'] is np.inf
+        logger.info(f'optimal: {optimal}')
         logger.info(f"Max throughput={throughput} samples/s")
-        print_strategies(min_res_list, logger)
-        # print(min_res_list)
-        result = {'min_cost': min_cost, 'min_res_list': min_res_list, 'min_pp_deg': min_pp_deg, 
-                        'mem_remain': mem_remain, 'mem_cost': mem_cost, 'throughput': throughput, "vtp": min_vtp}
+        print_strategy_list(optimal['strategy_list'], logger)
+
+        result = {
+            'throughput': throughput,
+            'time_cost': optimal['time_cost'],
+            'strategy_list': optimal['strategy_list'],
+            'pp_size': pp_size,
+            'pp_stage_list': pp_stage_list,
+            'memory_remain': optimal['memory_remain'],
+            'memory_cost': optimal['memory_used'],
+            'embedding_lmhead_tp_sp_size': optimal['embedding_lmhead_tp_sp_size'],
+            'embedding_lmhead_sp': optimal['embedding_lmhead_sp'],
+            'embedding_lmhead_sdp': optimal['embedding_lmhead_sdp'],
+        }
+
         return result
 
-    def save_results(self, results, bsz, chunk, pp_stage_dict):
-        re, optimal_bsz = results, bsz
+    def set_searching_bsz(self):
         args = self.args
-        if re['min_pp_deg'] > 0 and re['min_res_list'] is not None:
-            result_strategy = []
-            if isinstance(re['min_res_list'],list) and isinstance(re['min_res_list'][0],list) and isinstance(re['min_res_list'][0][0],list):
-                for l in re['min_res_list']:
-                    result_strategy += l
-            else:
-                result_strategy = re['min_res_list']
-            # print(re['min_res_list'], result_strategy)
-            config = strategy2config(result_strategy)
-            config['checkpoint'] = array2str([1 if 'cpt' in s[-1] and s[-1]['cpt'] else 0 for s in result_strategy])
-            config['global_bsz'] = optimal_bsz
-            config['chunks'] = chunk # max([int(self.optimal_chunk_func(optimal_bsz//s[2],s,mbsz)) for s in result_strategy]) # if config['pp_deg'] > 1 else 1
-            config['pp_division'] = array2str(pp_stage_dict[config['pp_deg']])
-            config['pipeline_type'] = args.pipeline_type
-            config['default_dp_type'] = args.default_dp_type
-            config['vtp'] = re['vtp']
-            config['vsp'] = re['vsp']
-            config['vocab_sdp'] = re['vocab_sdp']
-            # if args.vocab_sdp:
-            #     config['vocab_sdp'] = 1
-            
-            mixed_precision = '_%s'%args.mixed_precision
-            settle_bsz = '_bsz%d'%args.settle_bsz if args.settle_bsz > 0 else ''
-            off_options = []
-            if args.disable_dp:
-                off_options.append('dp')
-            if args.disable_tp:
-                off_options.append('tp')
-            if args.disable_pp:
-                off_options.append('pp')
-            if args.disable_sdp:
-                off_options.append('sdp')
-            if args.disable_ckpt:
-                off_options.append('ckpt')
-            if args.disable_tp_consec:
-                off_options.append('tpconsec')
-            off_options_str = '_[%s_off]'%('_'.join(off_options))if len(off_options) else ''
-            config_path = args.output_config_path
-            if config_path is None:
-                config_path = os.path.join(self.path, 'configs/')
-            output_config_name = 'galvatron_config_%s_%dnodes_%dgpus_per_node_%dGB'%(self.model_name, args.num_nodes, args.num_gpus_per_node, self.memory_constraint//1024)
-            output_config_name = output_config_name + mixed_precision + settle_bsz + off_options_str + '.json'
-            config_path = os.path.join(config_path, output_config_name)
-            print(config_path)
-            write_json_config(config, config_path)
-            print('Already written optimized parallelism config into galvatron config file %s!'%(config_path))
 
-    # Check cost model, for developers
-    def check_cost_model(self, bsz, chunk, min_tp):
-        memory = [[] for _ in range(self.num_layertype)]
-        memory_total = [[] for _ in range(self.num_layertype)]
-        strategies = copy.deepcopy(self.strategies)
-        strategies = [s for s in strategies if s[1] >= min_tp]
-        print(strategies)
-        pp_deg_list = sorted(list(set([s[0] for s in strategies])))
-        
-        pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
-                    
-        mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
-        for pp in pp_deg_list:
-            mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
-        
-        other = []
-        for i in range(self.num_layertype):
-            model_args, train_args, parallel_args, profile_model_args, profile_hardware_args, layer_num = self.model_args_list[i], self.train_args_list[i], self.parallel_args_list[i], self.profile_model_args_list[i], self.profile_hardware_args_list[i], self.layernum_list[i]
-            for strategy in self.strategies:
-                re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, 
-                                     model_args=model_args, train_args=train_args, parallel_args=parallel_args, profile_model_args=profile_model_args).get_memory_cost()
-                re_total = re['enc_total']*layer_num/strategy[0]
-                print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other'][min_tp]])
-                memory[i].append(re['enc_total'])
-                memory_total[i].append(re['enc_total']*layer_num)
-                if i == 0:
-                    other.append(re['other'])
-            print()
-        # print(other)
-        for i, strategy in enumerate(strategies):
-            if strategy[0]==1:
-                print(form_strategy(strategy), np.sum([memory_total[j][i] for j in range(self.num_layertype)])+other[i][min_tp][0])
-            else:
-                layer_memcosts = get_layer_costs(self.layernum_list, [memory[j][i] for j in range(self.num_layertype)])
-                pp_division = pp_division_even(self.layernum_list, strategy[0])
-                mem_cost_stages = get_cost_all_stages(layer_memcosts, pp_division)
-                print(form_strategy(strategy), mem_cost_stages[0]+other[i][min_tp][0], mem_cost_stages[-1]+other[i][min_tp][-1])
-        
-        print()
-        if self.num_layertype == 1:
-            for strategy in strategies:
-                other_time_cost = {}
-                n_gpu = strategies[0][0] * strategies[0][1] * strategies[0][2]
-                for k, v in other[0].items():
-                    other_time_cost[k] = [0] * strategy[0]
-                    
-                    comm_factor = 2 * (k - 1) / k * (mbsz_dict[strategy[0]] / min_tp * k)
-                    data_size = (self.model_args_list[0].seq_length * 
-                                self.model_args_list[0].hidden_size * 2 * 4 / 1024 / 1024 / 1024)
-
-                    if k == 1 or k == n_gpu:
-                        comm_coe = self.profile_hardware_args_list[0].comm_coe_dict['%d' % k]
-                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
-                    else:
-                        comm_coe = self.profile_hardware_args_list[0].comm_coe_dict['%d_0' % k]
-                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
-                    if self.args.mixed_precision:
-                        for t in range(strategy[0]):
-                            other_time_cost[k][t] /= 2
-                    if isinstance(self.other_time_profiled_list[0],np.ndarray):
-                        def linear_func(x, m, c):
-                            return m * x + c
-                        other_time_cost[k][0] += linear_func(mbsz_dict[strategy[0]] / min_tp, *self.other_time_profiled_list[0]) * 0.001 * 3 / 2
-                        other_time_cost[k][-1] += linear_func(mbsz_dict[strategy[0]] / min_tp, *self.other_time_profiled_list[0]) * 0.001 * 3 / 2
-                    else:
-                        other_time_cost[k][0] += mbsz_dict[strategy[0]] / min_tp * self.other_time_profiled_list[0] * 0.001 * 3 / 2
-                        other_time_cost[k][-1] += mbsz_dict[strategy[0]] / min_tp * self.other_time_profiled_list[0] * 0.001 * 3 / 2
-                    
-                res = []
-                for i in self.layernum_list:
-                    res += [strategy for _ in range(i)]
-                # print(other_time_cost[1])
-                pipeline_cost = pipeline_costmodel(TimeCostModel,
-                                                    self.layernum_list,
-                                                    [model_args],
-                                                    [train_args],
-                                                    [parallel_args],
-                                                    [profile_model_args],
-                                                    [profile_hardware_args],
-                                                    res,
-                                                    pp_division_even(self.layernum_list, strategy[0]),
-                                                    [chunk],
-                                                    bsz,
-                                                    min_tp,
-                                                    other_time_cost[min_tp])
-                print(form_strategy(strategy), pipeline_cost)
+        if args.batch_size_info.settle_bsz is not None and args.batch_size_info.settle_bsz > 0:
+            self.min_bsz = self.max_bsz = args.batch_size_info.settle_bsz
+            self.bsz_scale = 0
+            self.BSZs = [args.batch_size_info.settle_bsz]
+            print('-----', '[Searching Batch Sizes Info]', 'Settle bsz:', args.batch_size_info.settle_bsz, '-----')
+            print('-----', '[Searching Batch Sizes Info]', 'BSZs:', self.BSZs, '-----')
         else:
-            if self.num_layertype > 1:
-                assert False, "Not implemented with multi-layertype"
-                for i, strategy in enumerate(strategies):
-                    print(form_strategy(strategy), np.sum([timecost_total[j][i] for j in range(self.num_layertype)]))
-        
-    # =============== Strategies & Search Space Utils ===============
-    def generate_strategies(self):
-        args = self.args
-        gpu_num = args.gpu_num
-        strategies = self.generate_dp_tp_pp_sdp()
-        if args.search_space == 'dp+tp':
-            args.disable_sdp = 1
-            args.disable_pp = 1
-        elif args.search_space == 'dp+pp':
-            args.disable_sdp = 1
-            args.disable_tp = 1
-        elif args.search_space == '3d':
-            args.disable_sdp = 1
-        if args.search_space in ['3d', 'dp', 'tp', 'pp', 'sdp']:
-            self.strategies = strategies
-            args.disable_ckpt = 1
-            return strategies
-        strategies_new = []
-        assert(not(args.disable_sdp and args.disable_dp))
-        for s in strategies:
-            if args.disable_dp and s[2] > 1 and 'fsdp' in s[-1] and s[-1]['fsdp'] == 0:
-                continue
-            if args.disable_sdp and s[2] > 1 and 'fsdp' in s[-1] and s[-1]['fsdp'] == 1:
-                continue
-            if args.disable_tp and s[1] > 1:
-                continue
-            if args.disable_pp and s[0] > 1:
-                continue
-            if args.disable_tp_consec and 'tp' in s[-1] and s[-1]['tp'] == 0:
-                continue
-            if s[1] > args.max_tp_deg:
-                continue
-            if s[0] > args.max_pp_deg:
-                continue
-            strategies_new.append(s)
-        strategies = strategies_new
+            assert args.batch_size_info.min_bsz is not None and args.batch_size_info.max_bsz is not None and args.batch_size_info.bsz_scale is not None
+            assert args.batch_size_info.min_bsz > 0 and args.batch_size_info.max_bsz > 0 and args.batch_size_info.bsz_scale > 0
+            assert args.batch_size_info.max_bsz >= args.batch_size_info.min_bsz
+            self.min_bsz = max(args.batch_size_info.min_bsz, args.batch_size_info.bsz_scale)
+            self.bsz_scale = args.batch_size_info.bsz_scale
+            self.BSZs = list(range(self.min_bsz, args.batch_size_info.max_bsz + 1, self.bsz_scale))
+            self.max_bsz = self.BSZs[-1]
+            print('-----', '[Searching Batch Sizes Info]', 'Min bsz:', self.min_bsz, 'Max bsz:', self.max_bsz, 'bsz_scale:', self.bsz_scale, '-----')
+            print('-----', '[Searching Batch Sizes Info]', 'BSZs:', self.BSZs, '-----')
 
-        if not args.disable_ckpt:
-            strategies_cpt = []
-            for s in strategies:
-                s_cpt = copy.deepcopy(s)
-                s_cpt[-1]['cpt']=1
-                strategies_cpt.append(s_cpt)
-            strategies += strategies_cpt
-        self.strategies = strategies
-        return strategies
-    
-    def generate_dp_tp_pp_sdp(self, gpu_num=None, search_space=None):
+    def save_results(self, optimal, optimal_bsz, chunk):
         args = self.args
-        gpu_num = args.gpu_num if gpu_num is None else gpu_num
-        search_space = args.search_space if search_space is None else search_space
-        i, total = 1, []
-        while i<=gpu_num:
-            total.append(i)
-            i *= 2
-        if args.search_space == 'full':
-            strategies = []
-            for pp in total:
-                for tp in total:
-                    if pp*tp<=gpu_num:
-                        dp = gpu_num // (pp * tp) 
-                        if tp==1 or tp == gpu_num/pp:
-                            if dp == 1:
-                                strategies.append([pp,tp,dp,{}])
-                            else:
-                                strategies.append([pp,tp,dp,{'fsdp':0}])
-                                strategies.append([pp,tp,dp,{'fsdp':1}])
-                        else:
-                            strategies.append([pp,tp,dp,{'tp':0,'fsdp':0}])
-                            strategies.append([pp,tp,dp,{'tp':0,'fsdp':1}])
-                            strategies.append([pp,tp,dp,{'tp':1,'fsdp':0}])
-                            strategies.append([pp,tp,dp,{'tp':1,'fsdp':1}])
-        elif args.search_space == 'dp+tp':
-            strategies = []
-            pp = 1
-            for tp in total:
-                if pp*tp<=gpu_num:
-                    dp = gpu_num // (pp * tp) 
-                    if tp==1 or tp == gpu_num/pp:
-                        if dp == 1:
-                            strategies.append([pp,tp,dp,{}])
-                        else:
-                            strategies.append([pp,tp,dp,{'fsdp':0}])
-                    else:
-                        strategies.append([pp,tp,dp,{'tp':0,'fsdp':0}])
-                        strategies.append([pp,tp,dp,{'tp':1,'fsdp':0}])
-        elif args.search_space == 'dp+pp':
-            strategies = []
-            tp = 1
-            for pp in total:
-                if pp*tp<=gpu_num:
-                    dp = gpu_num // (pp * tp) 
-                    if tp==1 or tp == gpu_num/pp:
-                        if dp == 1:
-                            strategies.append([pp,tp,dp,{}])
-                        else:
-                            strategies.append([pp,tp,dp,{'fsdp':0}])
-                    else:
-                        strategies.append([pp,tp,dp,{'tp':0,'fsdp':0}])
-                        strategies.append([pp,tp,dp,{'tp':1,'fsdp':0}])
-        elif args.search_space == '3d':
-            strategies = [[2,2,gpu_num//4,{'tp':1,'fsdp':0}]]
-        elif args.search_space == 'dp':
-            strategies = [[1,1,gpu_num,{'fsdp':0}]]
-        elif args.search_space == 'sdp':
-            strategies = [[1,1,gpu_num,{'fsdp':1}]]
-        elif args.search_space == 'tp':
-            strategies = [[1,args.max_tp_deg,gpu_num//args.max_tp_deg,{'fsdp':0}]]
-            if strategies[0][2] > 1:
-                strategies[0][-1]['tp'] = 1
-        elif args.search_space == 'pp':
-            strategies = [[args.max_pp_deg,1,gpu_num//args.max_pp_deg,{'fsdp':0}]]
+
+        result_strategy = optimal['strategy_list']
+        config = strategy_list2config(result_strategy)
+        config['global_bsz'] = optimal_bsz
+        config['chunks'] = chunk
+        config['pp_division'] = array2str(optimal['pp_stage_list'])
+        config['pipeline_type'] = args.parallelism_info.pipeline_type
+        config['default_dp_type'] = args.parallelism_info.default_dp_type
+        config['vtp'] = optimal['embedding_lmhead_tp_sp_size']
+        config['vsp'] = optimal['embedding_lmhead_sp']
+        config['embed_sdp'] = optimal['embedding_lmhead_sdp']
         
-        if args.sp_space == 'tp':
-            for strategie in strategies:
-                if strategie[1] > 1:
-                    strategie[-1]['sp'] = 0
-        elif args.sp_space == 'sp':
-            for strategie in strategies:
-                if strategie[1] > 1:
-                    strategie[-1]['sp'] = 1
-        elif args.sp_space == 'tp+sp':
-            new_strategies = []
-            for strategie in strategies:
-                if strategie[1] > 1:
-                    strategie[-1]['sp'] = 0
-                    new_strategies.append(copy.deepcopy(strategie))
-                    strategie[-1]['sp'] = 1
-                    new_strategies.append(copy.deepcopy(strategie))
-                else:
-                    new_strategies.append(copy.deepcopy(strategie))
-            return new_strategies
-        return strategies
-    
+        mixed_precision = '_%s'%args.parallelism_info.mixed_precision
+        settle_bsz = '_bsz%d'%args.batch_size_info.settle_bsz if args.batch_size_info.settle_bsz > 0 else ''
+        off_options = []
+        if args.search_space_info.disable_dp:
+            off_options.append('dp')
+        if args.search_space_info.disable_tp:
+            off_options.append('tp')
+        if args.search_space_info.disable_pp:
+            off_options.append('pp')
+        if args.search_space_info.disable_fsdp:
+            off_options.append('fsdp')
+        if args.search_space_info.disable_ckpt:
+            off_options.append('ckpt')
+        off_options_str = '_[%s_off]'%('_'.join(off_options))if len(off_options) else ''
+        config_path = args.options_info.output_config_path
+        if config_path is None:
+            config_path = os.path.join(self.path, 'configs/')
+        output_config_name = 'galvatron_config_%s_%dnodes_%dgpus_per_node_%dGB'%(self.model_name, args.hardware_info.num_nodes, args.hardware_info.num_gpus_per_node, self.memory_constraint//1024)
+        output_config_name = output_config_name + mixed_precision + settle_bsz + off_options_str + '.json'
+        config_path = os.path.join(config_path, output_config_name)
+        print(config_path)
+        write_json_config(config, config_path)
+        print('Already written optimized parallelism config into galvatron config file %s!'%(config_path))
+
+    # =========================== Checking Cost Model (For Developer)===========================
+    def check_cost_model(self, gbsz, chunks, specific_strategy_list:List[LayerStrategy] = None):
+        print(f'=============== Checking Cost Model for gbsz={gbsz}, chunks={chunks} ==================')
+        assert self.num_layertype == 1 # # NOTE only for decode-only model
+        assert hasattr(self, 'layer_strategy_list'), f"{ColorSet.RED}[ERROR] [{self.__class__.__name__}] layer_strategy_list is not set.{ColorSet.RESET}"
+        assert gbsz % chunks == 0, f"{ColorSet.RED}[ERROR] [{self.__class__.__name__}] gbsz {gbsz} is not divisible by chunks {chunks}.{ColorSet.RESET}"
+
+        total_layernum = self.total_layernum
+
+        if specific_strategy_list is not None:
+            layer_strategy_list = specific_strategy_list
+        else:
+            layer_strategy_list = self.layer_strategy_list
+        layer_strategy_num = len(layer_strategy_list)
+        time_cost_each_strategy = [-1 for _ in range(layer_strategy_num)]
+        memory_cost_each_strategy = [None for _ in range(layer_strategy_num)]
+
+        for layer_strategy_idx, layer_strategy in enumerate(layer_strategy_list):
+            print(f'start check layer_strategy: {layer_strategy_idx}-th, strategy: {layer_strategy}')
+            embedding_lmhead_strategy = layer_strategy.to_embedding_lmhead_strategy()
+
+            pp_size = layer_strategy.pp_size
+            dp_size = layer_strategy.dp_size
+            if pp_size > chunks:
+                print(f'pp_size {pp_size} is greater than chunks {chunks}, skip')
+                continue
+            if gbsz // chunks < dp_size:
+                print(f'gbsz // chunks {gbsz // chunks} is less than dp_size {dp_size}, skip')
+                continue
+            
+            partition = pp_division_even(self.layernum_list, pp_size) # len(partition) == pp_size. partition[stage_idx] means the number of layers in the stage_idx-th stage
+
+            # =========================== Time Cost Model ===========================
+            embedding_lmhead_time_obj = EmbeddingLMHeadTimeCostModel(
+                strategy=embedding_lmhead_strategy,
+                global_batch_size=gbsz,
+                chunks=chunks,
+                logger=None,
+                sequence_length_list=self.seqlen_list,
+                model_args=self.model_args_list[0],
+                train_args=self.train_args_list[0],
+                parallel_args=self.parallel_args_list[0],
+                profile_model_args=self.profile_model_args_list[0],
+                profile_hardware_args=self.profile_hardware_args_list[0]
+            )
+            embedding_lmhead_time, embedding_lmhead_time_no_grad_sync = embedding_lmhead_time_obj.gen_result()
+            strategy_list = [layer_strategy for _ in range(total_layernum)] # 每一层都采用此策略
+            
+            pipeline_time = pipeline_costmodel(
+                layer_num_list=self.layernum_list,
+                model_args_list=self.model_args_list,
+                train_args_list=self.train_args_list,
+                parallel_args_list=self.parallel_args_list,
+                profile_model_args_list=self.profile_model_args_list,
+                profile_hardware_args_list=self.profile_hardware_args_list,
+                strategy_list=strategy_list,
+                partition=partition,
+                chunks=chunks,
+                gbsz=gbsz,
+                pp_size=pp_size,
+                other_time_cost=embedding_lmhead_time_no_grad_sync,
+                logger=None,
+                return_stage_cost=False
+            )
+            time_cost_each_strategy[layer_strategy_idx] = pipeline_time
+
+            # =========================== Memory Cost Model ===========================
+            memory_cost = [0 for _ in range(pp_size)]
+            embedding_lmhead_memory_cost_obj = EmbeddingLMHeadMemoryCostModel(
+                strategy=embedding_lmhead_strategy,
+                global_batch_size=gbsz,
+                chunks=chunks,
+                logger=None,
+                model_args=self.model_args_list[0],
+                train_args=self.train_args_list[0],
+                parallel_args=self.parallel_args_list[0],
+                profile_model_args=self.profile_model_args_list[0]
+            )
+            embedding_lmhead_memory_cost = embedding_lmhead_memory_cost_obj.get_memory_cost()
+            embedding_lmhead_memory_cost = embedding_lmhead_memory_cost['enc_total']
+
+            for stage_idx in range(pp_size):
+                memory_cost[stage_idx] += embedding_lmhead_memory_cost[stage_idx]
+                layer_memory_cost_obj = MemoryCostModelBase(
+                    strategy=layer_strategy,
+                    global_batch_size=gbsz,
+                    chunks=chunks,
+                    stage_idx=stage_idx,
+                    logger=None,
+                    model_args=self.model_args_list[0], # because only one layertype
+                    train_args=self.train_args_list[0], # because only one layertype
+                    parallel_args=self.parallel_args_list[0], # because only one layertype
+                    profile_model_args=self.profile_model_args_list[0] # because only one layertype
+                )
+                layer_memory_cost = layer_memory_cost_obj.get_memory_cost()
+                layer_memory_cost = layer_memory_cost['enc_total']
+                memory_cost[stage_idx] += layer_memory_cost * partition[stage_idx]
+
+            memory_cost_each_strategy[layer_strategy_idx] = memory_cost
+        
+        # =========================== Print Time Cost ===========================
+        print()
+        for layer_strategy_idx in range(layer_strategy_num):
+            strategy_string = layer_strategy_list[layer_strategy_idx].to_simple_string()
+            print(f'{strategy_string}: {time_cost_each_strategy[layer_strategy_idx]}')
+
+        # =========================== Print Memory Cost ===========================
+        print()
+        for layer_strategy_idx in range(layer_strategy_num):
+            strategy_string = layer_strategy_list[layer_strategy_idx].to_simple_string()
+            print(f'{strategy_string}: {memory_cost_each_strategy[layer_strategy_idx]}')
+        
+        return time_cost_each_strategy, memory_cost_each_strategy
+
+    # =============== Search Engine Info Utils ===============
     def show_search_info(self):
         print('================================================================================')
         print('--- Optimization Configs ----')
-        print('Memory constraint: %d GB'%self.args.memory_constraint)
-        print('Pipeline Type:', self.args.pipeline_type)
-        print('Default DP Type:', self.args.default_dp_type)
-        print('Mixed Precision:', self.args.mixed_precision)
-        # if self.args.vocab_sdp:
-        #     print('Embedding SDP: ON')
-        print('Search Space:')
-        print_strategies(self.strategies)
+        print('Memory constraint: %d GB'%self.args.hardware_info.memory_constraint)
+        print('Pipeline Type:', self.args.parallelism_info.pipeline_type)
+        print('Default DP Type:', self.args.parallelism_info.default_dp_type)
+        print('Mixed Precision:', self.args.parallelism_info.mixed_precision)
         print('================================================================================')
         print('---- Environment Configs ----')
         print('Allreduce Bandwidth (GB/s):', self.allreduce_bandwidth)
@@ -969,7 +951,7 @@ class GalvatronSearchEngine():
 
 
 # ========================== Pipeline Division & Pipeline Cost Utils ==========================
-def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num, pp_deg, bsz, mbsz, strategies):
+def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num, pp_deg, bsz, mbsz, strategies:Union[List[LayerStrategy], List[EmbeddingLMHeadStrategy]]): # TODO: Confirm whether this function is still required.
     model_args_list, train_args_list= [copy.deepcopy(model_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(train_args_list[i]) for i in range(len(layer_num))]
     parallel_args_list, profile_model_args_list = [copy.deepcopy(parallel_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(profile_model_args_list[i]) for i in range(len(layer_num))]
     for i in range(len(parallel_args_list)):
@@ -979,18 +961,47 @@ def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_
         return [np.sum(layer_num)], None
     layer_type_num = len(layer_num)
     layer_min_memcost = []
-    strategies = list(filter(lambda s: s[0] == pp_deg, strategies))
+    # strategies = list(filter(lambda s: s[0] == pp_deg, strategies))
+    strategies = list(filter(lambda s: s.pp_size == pp_deg, strategies))
     if len(strategies)==0:
         return None, None
-    gpu_num = strategies[0][0] * strategies[0][1] * strategies[0][2]
+    gpu_num = strategies[0].world_size
+    # gpu_num = strategies[0][0] * strategies[0][1] * strategies[0][2]
     for i in range(layer_type_num):
         # memcosts = [MemoryCostModel(strategy, global_batch_size=bsz, model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total'] for strategy in strategies]
         # layer_min_memcost.append(np.min(memcosts))
-        memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
-                                  model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total']
+        temp_strategy = LayerStrategy(pp_size=pp_deg, tp_size=1, sp_size=1, dp_size=gpu_num//pp_deg, dp_type=DPType.ZERO2, checkpoint=False)
+        memcost = MemoryCostModelBase(
+            strategy=temp_strategy,
+            global_batch_size=bsz,
+            chunks=bsz//mbsz,
+            model_args=model_args_list[i],
+            train_args=train_args_list[i],
+            parallel_args=parallel_args_list[i],
+            profile_model_args=profile_model_args_list[i]
+        ).get_memory_cost()['enc_total']
+        # memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
+                                #   model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total']
         layer_min_memcost.append(np.min(memcost))
-    other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
-                                 model_args=model_args_list[0], train_args=train_args_list[0], parallel_args=parallel_args_list[0], profile_model_args=profile_model_args_list[0]).get_memory_cost()['other'][1]
+    
+    embedding_lmhead_strategy = EmbeddingLMHeadStrategy(
+        pp_size=pp_deg,
+        tp_size=1,
+        sp_size=1,
+        dp_size=gpu_num//pp_deg,
+        dp_type=DPType.ZERO2,
+    )
+    other_cost = EmbeddingLMHeadMemoryCostModel(
+        strategy=embedding_lmhead_strategy,
+        global_batch_size=bsz,
+        chunks=bsz//mbsz,
+        model_args=model_args_list[0],
+        train_args=train_args_list[0],
+        parallel_args=parallel_args_list[0],
+        profile_model_args=profile_model_args_list[0],
+    ).get_memory_cost()['enc_total']
+    # other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
+                                #  model_args=model_args_list[0], train_args=train_args_list[0], parallel_args=parallel_args_list[0], profile_model_args=profile_model_args_list[0]).get_memory_cost()['other'][1]
     # print(other_cost)
     # print(layer_min_memcost, other_cost)
     min_memcost_all_layers = []
@@ -1046,9 +1057,9 @@ def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_
     # print(mem_cost_per_stage,mem_cost_per_stage_adjusted)
     return pp_divide, mem_cost_per_stage_adjusted
 
-def get_pp_stage_for_bsz(strategies, model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num_list, bsz, mbsz_dict, single_layer_even=True):
+def get_pp_stage_for_bsz(strategies:List[LayerStrategy], model_args_list, train_args_list, parallel_args_list, profile_model_args_list, layer_num_list, bsz, mbsz_dict, single_layer_even=True):
     pp_stage_dict = dict()
-    pp_deg_list = sorted(list(set([s[0] for s in strategies])))
+    pp_deg_list = sorted(list(set([s.pp_size for s in strategies])))
     for pp_deg in pp_deg_list:
         if single_layer_even and len(layer_num_list) == 1:
             pp_divide = pp_division_even(layer_num_list, pp_deg)
@@ -1086,19 +1097,3 @@ def pp_division_even(layernum_list, pp_deg):
     last_layer_num = total_layer_num - avg_layer_num * (pp_deg-1)
     pp_division = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
     return pp_division
-    
-def optimal_chunk_func_default(local_bsz, strategy, microbatch_size, min_tp):
-    # if strategy[0] == 1:
-    #     return 1
-    assert(strategy[1] % min_tp == 0)
-    local_bsz = local_bsz // (strategy[1] // min_tp)
-    chunk = np.ceil(local_bsz / microbatch_size)
-    chunk = 1 if chunk == 0 else chunk
-    # chunk = int(min(max_chunk,chunk))
-    return chunk
-
-def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz, mbsz_dict, min_tp):
-    chunk_dict = {}
-    for pp_deg in sorted(set([s[0] for s in strategies])):
-        chunk_dict[pp_deg] = optimal_chunk_func(bsz / (world_size // pp_deg // min_tp), [pp_deg, min_tp, world_size // pp_deg, {'fsdp':0, 'cpt':0}], mbsz_dict[pp_deg], min_tp)
-    return chunk_dict

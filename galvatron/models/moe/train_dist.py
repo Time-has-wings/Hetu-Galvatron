@@ -1,29 +1,22 @@
+"""Distributed training entry point for GPT.
+
+Usage:
+    torchrun ... train_dist.py scripts/train_dist.yaml [overrides...]
+"""
+
 import os
+import sys
 
 import torch
-from torch import nn
-from tqdm import tqdm
-from transformers import MixtralConfig, MixtralForCausalLM
 
-from galvatron.core import (
-    RuntimeProfiler,
-    clip_grad_norm,
-    get_optimizer_and_param_scheduler,
-    initialize_galvatron,
-    set_megatron_args_for_dataset,
-)
-from galvatron.models.moe.arguments import model_args
-from galvatron.models.moe.dataloader import (
-    DataLoaderForMoE,
-    get_batch,
-    get_train_valid_test_data_iterators,
-    loss_func,
-)
-from galvatron.models.moe.MoEModel_checkpoint import save_moe_module
-from galvatron.models.moe.MoEModel_hybrid_parallel import get_moe_config, get_runtime_profiler, moe_model_hp
-from galvatron.models.moe.meta_configs import model_layer_configs, model_name
-from galvatron.utils import distributed_dataloader, print_loss, set_seed
-from megatron.training.arguments import _print_args
+from galvatron.core.arguments import load_with_hydra
+from galvatron.core.runtime.optimizer.utils import clip_grad_norm, get_optimizer_and_param_scheduler
+from galvatron.core.runtime.models.builder import build_model, get_runtime_profiler
+from galvatron.core.runtime.dataloader import get_batch, get_train_valid_test_data_iterators
+from galvatron.core.runtime.utils.utils import set_megatron_args_for_dataset
+from galvatron.core.runtime.initialize import initialize_galvatron, _print_args
+from galvatron.core.runtime.checkpoint.moe_adapter import save_moe_module
+from galvatron.utils.hf_config_adapter import resolve_model_config
 
 
 def train(args):
@@ -31,69 +24,60 @@ def train(args):
     rank = torch.distributed.get_rank()
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    world_size = torch.distributed.get_world_size()
 
-    config = get_moe_config(args)
-    model = moe_model_hp(config, args)
+    resolve_model_config(args)
+    model = build_model(args)
 
     if local_rank == 0:
         print("Creating Dataset...")
 
-    set_megatron_args_for_dataset(
-        args, model, model.sp_groups_whole[0] if args.vocab_sp else model.tp_groups_whole[0], model.dp_groups_whole[0], model.cp_groups_whole[0]
-    )
-    if local_rank == 0:
-        _print_args("arguments", args)
+    set_megatron_args_for_dataset(args)
+
+    _print_args(args)
 
     train_data_iterator, valid_data_iterator, test_data_iterator = get_train_valid_test_data_iterators()
-
     optimizer, opt_param_scheduler = get_optimizer_and_param_scheduler(model, args)
 
     path = os.path.dirname(os.path.abspath(__file__))
-    profiler = get_runtime_profiler(args, path, config, start_iter=0)
-
+    profiler = get_runtime_profiler(args, path, start_iter=args.train.iteration, end_iter=args.train.train_iters)
     profiler.profile_memory(0, "After creating model")
+
     if local_rank == 0:
         print("Start training...")
 
-    for iter in range(args.iteration, args.train_iters):
+    for iter_idx in range(getattr(args.train, "iteration", 0), args.train.train_iters):
         tokens, kwargs, loss_func = get_batch(train_data_iterator)
-        profiler.profile_time_start(iter)
-        profiler.profile_memory(iter, "Before Forward")
 
-        input_ids = tokens
-        batch = [input_ids]
+        profiler.profile_time_start(iter_idx)
+        profiler.profile_memory(iter_idx, "Before Forward")
 
-        loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
+        loss = model.forward_backward([tokens], iter_idx, profiler, loss_func=loss_func, **kwargs)
 
-        profiler.profile_memory(iter, "After Backward")
+        profiler.profile_memory(iter_idx, "After Backward")
 
-        # for name, weight in model.named_parameters():
-        #     if torch.cuda.current_device() == 0:
-        #         print(f"final grad {name},{weight.grad}")
-        total_norm = clip_grad_norm(model, args.clip_grad)
-        # total_norm = 0.0
+        grad_norm = clip_grad_norm(model, args.train.clip_grad)
         optimizer.step()
-        opt_param_scheduler.step(increment=args.global_batch_size)
+        opt_param_scheduler.step(increment=args.train.global_batch_size)
 
-        profiler.profile_memory(iter, "After optimizer_step")
-
+        profiler.profile_memory(iter_idx, "After optimizer_step")
         optimizer.zero_grad()
+        profiler.post_profile_memory(iter_idx)
 
-        # print_loss(args, loss, ep, iter)
+        lr = optimizer.param_groups[0]["lr"]
+        profiler.profile_time_end(iter_idx, loss, lr, grad_norm)
 
-        profiler.post_profile_memory(iter)
-        for param_group in optimizer.param_groups:
-            learning_rate = param_group["lr"]
-        profiler.profile_time_end(iter, loss, learning_rate, total_norm)
+        if args.ckpt.save is not None and args.ckpt.save_interval is not None and (iter_idx + 1) % args.ckpt.save_interval == 0:
+            save_moe_module(args.ckpt.save, model, optimizer, opt_param_scheduler, iter_idx + 1, args)
 
         torch.distributed.barrier()
 
-        if args.save != None and (iter + 1) % args.save_interval == 0:
-            save_moe_module(args.save, model, optimizer, opt_param_scheduler, iter + 1, args)
-
 
 if __name__ == "__main__":
-    args = initialize_galvatron(model_args, mode="train_dist")
-    set_seed()
+    if len(sys.argv) >= 2 and sys.argv[1].endswith((".yaml", ".yml")):
+        config_path, overrides = sys.argv[1], sys.argv[2:]
+        sys.argv = [sys.argv[0]]
+        args = load_with_hydra(config_path, overrides=overrides, mode="train_dist")
+    else:
+        raise ValueError("Usage: python train_dist.py <config_path> [overrides...]")
+    initialize_galvatron(args)
     train(args)
