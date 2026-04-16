@@ -22,7 +22,7 @@ from .runtime.args_schema import (
 from .profiler.args_schema import ProfilerArgs, ProfilerHardwareArgs
 
 # Search engine args
-from .search_engine.args_schema import SearchEngineArgs
+from .search_engine.args_schema import GalvatronSearchArgs
 
 __all__ = [
     # Runtime
@@ -50,4 +50,4 @@ class CoreArgs(BaseModel):
     runtime: Optional[GalvatronRuntimeArgs] = Field(default=None, description="Training/runtime args")
     profiler: Optional[ProfilerArgs] = Field(default=None, description="Profiler args")
     profiler_hardware: Optional[ProfilerHardwareArgs] = Field(default=None, description="Hardware profiler args")
-    search_engine: Optional[SearchEngineArgs] = Field(default=None, description="Search engine args")
+    search_engine: Optional[GalvatronSearchArgs] = Field(default=None, description="Search engine args")

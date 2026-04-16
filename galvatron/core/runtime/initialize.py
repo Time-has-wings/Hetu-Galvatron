@@ -5,8 +5,10 @@ import json
 import torch
 import torch.nn as nn
 
-from galvatron.core.runtime.parallel_state import set_global_variables, _initialize_distributed, _set_global_memory_buffer
+from galvatron.core.runtime.parallel_state import set_global_variables, set_global_memory_buffer
 from galvatron.core.runtime.utils.rerun_state_machine import initialize_rerun_state_machine
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
+from datetime import timedelta
 
 @contextmanager
 def init_empty_weights(include_buffers: bool = True):
@@ -108,14 +110,43 @@ def init_on_device(device: torch.device, include_buffers: bool = True):
             setattr(torch, torch_function_name, old_torch_function)
 
 
-def initialize_galvatron(args):
+def _initialize_distributed(args:GalvatronRuntimeArgs):
+    if torch.distributed.is_initialized():
+
+        if args.rank == 0:
+            print(
+                "torch distributed is already initialized, " "skipping initialization ...",
+                flush=True,
+            )
+        args.rank = torch.distributed.get_rank()
+        args.world_size = torch.distributed.get_world_size()
+
+    else:
+        if args.rank == 0:
+            print("> initializing torch distributed ...", flush=True)
+
+        torch.cuda.set_device(args.local_rank)
+
+        # Call the init process
+        init_process_group_kwargs = {
+            'backend': args.distributed_backend,
+            'world_size': args.world_size,
+            'rank': args.rank,
+            'timeout': timedelta(minutes=args.distributed_timeout_minutes),
+        }
+
+        torch.distributed.init_process_group(**init_process_group_kwargs)
+
+
+def initialize_galvatron(args:GalvatronRuntimeArgs):
     args.rank = int(os.environ["RANK"])
     args.world_size = int(os.environ["WORLD_SIZE"])
     args.local_rank = int(os.environ["LOCAL_RANK"])
+
     validate_args(args)
     set_global_variables(args)
     _initialize_distributed(args)
-    _set_global_memory_buffer()
+    set_global_memory_buffer()
     initialize_rerun_state_machine()
 
     # Setup MoE aux loss scale value.
@@ -154,7 +185,7 @@ def _compile_dependencies():
         )
 
 
-def validate_args(args):
+def validate_args(args:GalvatronRuntimeArgs):
     train = args.train
     data = args.data
     ckpt = args.ckpt
@@ -204,7 +235,7 @@ def validate_args(args):
         assert ckpt.save_interval is not None, "save_interval must be set when save is set"
 
 
-def _print_args(args, title: str = "arguments"):
+def _print_args(args:GalvatronRuntimeArgs, title: str = "arguments"):
     """Print Pydantic args as indented JSON. Only rank 0 prints."""
     if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
         return

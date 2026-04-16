@@ -1,6 +1,5 @@
 import json
 import os
-from .strategy_utils import form_strategy
 from typing import List
 import numpy as np
 from scipy.optimize import curve_fit
@@ -46,19 +45,6 @@ def config2strategy(config):
         use_sp = [0 for _ in range(len(tp_sizes_enc))]
     return pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp, vcp
 
-def strategy2config(strategy_list):
-    layer_num = len(strategy_list)
-    if layer_num == 0:
-        return {}
-    pp_deg = strategy_list[0][0]
-    tp_sizes_enc = array2str([s[1] for s in strategy_list])
-    tp_consecutive_flags = array2str([0 if 'tp' in s[-1] and not s[-1]['tp'] else 1 for s in strategy_list])
-    dp_types_enc = array2str([1 if 'fsdp' in s[-1] and s[-1]['fsdp'] else 0 for s in strategy_list])
-    sp = array2str([1 if 'sp' in s[-1] and s[-1]['sp'] else 0 for s in strategy_list])
-    
-    config = {"pp_deg":pp_deg, "tp_sizes_enc":tp_sizes_enc, "tp_consecutive_flags":tp_consecutive_flags, "dp_types_enc":dp_types_enc, "use_sp":sp}
-    return config
-
 def read_allreduce_bandwidth_config(config_path, gpu_num):
     if isinstance(config_path, str):
         env_config = read_json_config(config_path)
@@ -69,6 +55,10 @@ def read_allreduce_bandwidth_config(config_path, gpu_num):
     if max_dp >= 2:
         bandwidth_dict['%d'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
         comm_coe_dict['%d'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
+        bandwidth_dict['%d_1'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
+        comm_coe_dict['%d_1'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
+        bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
+        comm_coe_dict['%d_0'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
     max_dp = max_dp // 2
     while max_dp >= 2:
         bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_0'%(max_dp)]
@@ -78,6 +68,10 @@ def read_allreduce_bandwidth_config(config_path, gpu_num):
         max_dp = max_dp // 2
     bandwidth_dict['1']=np.inf
     comm_coe_dict['1']=0
+    bandwidth_dict['1_1']=np.inf
+    comm_coe_dict['1_1']=0
+    bandwidth_dict['1_0']=np.inf
+    comm_coe_dict['1_0']=0
     return bandwidth_dict, comm_coe_dict
 
 def read_p2p_bandwidth_config(config_path):
@@ -146,3 +140,43 @@ def print_single_rank(message, rank=0):
             print(message, flush=True)
     else:
         print(message, flush=True)
+
+def remap_config_for_latency(config, op):
+    if op == 'allreduce':
+        key_string = 'allreduce_size'
+        factor = 1
+    elif op == 'all2all':
+        key_string = 'all2all_size'
+        factor = 1
+    elif op == 'allgather':
+        key_string = 'allreduce_size'
+        factor = 0.5
+
+    remap_config = {}
+    for key, val in config.items():
+        if key.startswith(key_string):
+            split = key.split("_")
+            world_size, size = int(split[-3]), int(split[-2][:-2])
+            if world_size in remap_config:
+                remap_config[world_size][size] = val * factor
+            else:
+                remap_config[world_size] = {}
+                remap_config[world_size][size] = val * factor
+    
+    for world_size, time_config in remap_config.items():
+        x_data = []
+        y_data = []
+        for size, time in time_config.items():
+            x_data.append(size)
+            y_data.append(time)
+        assert len(x_data) >= 8, f"Different size in communication profile of {op} should not be lower than 8."
+    
+        def linear_func(x, m, c):
+            return m * x + c
+        popt, pcov = curve_fit(linear_func, x_data, y_data)
+        
+        print(f"Fitted parameters of {op}", popt)
+        
+        time_config["popt"] = popt
+        
+    return remap_config

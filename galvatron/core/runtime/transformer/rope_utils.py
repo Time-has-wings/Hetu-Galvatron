@@ -51,8 +51,8 @@ def get_pos_emb_on_this_cp_rank(pos_emb: Tensor, seq_dim: int) -> Tensor:
         pos_emb (Tensor): Positional embedding tensor
         seq_dim (int): Sequence dimension
     """
-    cp_size = parallel_state.get_vocab_context_parallel_world_size()
-    cp_rank = parallel_state.get_vocab_context_parallel_rank()
+    cp_size = parallel_state.get_vocab_cp_world_size()
+    cp_rank = parallel_state.get_vocab_cp_rank()
     cp_idx = torch.tensor(
         [cp_rank, (2 * cp_size - cp_rank - 1)], device="cpu", pin_memory=True
     ).cuda(non_blocking=True)
@@ -154,8 +154,8 @@ def _apply_rotary_pos_emb_thd(
         Tensor: Shape [t, h, d]. The input tensor after applying RoPE.
     """
 
-    cp_size = parallel_state.get_vocab_context_parallel_world_size()
-    cp_rank = parallel_state.get_vocab_context_parallel_rank()
+    cp_size = parallel_state.get_vocab_cp_world_size()
+    cp_rank = parallel_state.get_vocab_cp_rank()
     cu_seqlens = cu_seqlens // cp_size
     seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
 
@@ -201,7 +201,7 @@ def apply_rotary_pos_emb(
                 return fused_apply_rotary_pos_emb(t, freqs, transpose_output_memory=True)
         else:
             assert fused_apply_rotary_pos_emb_thd is not None, "apply_rope_fusion is not available."
-            cp_size = parallel_state.get_vocab_context_parallel_world_size()
+            cp_size = parallel_state.get_vocab_cp_world_size()
             if cp_size > 1:
                 if not is_te_min_version("1.11.0", check_equality=False):
                     raise ValueError("Only TE >= 1.12 supports RoPE fusion for THD format with CP.")
@@ -210,7 +210,7 @@ def apply_rotary_pos_emb(
                     cu_seqlens,
                     freqs,
                     cp_size=cp_size,
-                    cp_rank=parallel_state.get_vocab_context_parallel_rank(),
+                    cp_rank=parallel_state.get_vocab_cp_rank(),
                 )
             else:
                 return fused_apply_rotary_pos_emb_thd(t, cu_seqlens, freqs)
