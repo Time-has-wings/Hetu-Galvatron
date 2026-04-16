@@ -15,7 +15,8 @@ from pathlib import Path
 import pytest
 
 from galvatron.core.arguments import load_with_hydra
-from galvatron.core.args_schema import ProfilerArgs, ProfilerHardwareArgs, SearchEngineArgs
+from galvatron.core.args_schema import ProfilerHardwareArgs, SearchEngineArgs
+from galvatron.core.profiler.args_schema import GalvatronModelProfilerArgs
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TRAIN_DIST_YAML = _REPO_ROOT / "galvatron" / "models" / "gpt" / "scripts" / "train_dist.yaml"
@@ -73,19 +74,16 @@ def test_load_with_hydra_train_dist_overrides():
 @pytest.mark.utils
 def test_profiler_args_defaults():
     """Defaults aligned with former ``galvatron_profile_args`` expectations."""
-    args = ProfilerArgs()
+    args = GalvatronModelProfilerArgs()
     assert args.profile_type == "memory"
-    assert args.set_layernum_manually == 1
     assert args.profile_mode == "static"
-    assert args.profile_batch_size_step == 1
-    assert args.profile_seq_length_step == 128
-    assert args.layernum_min == 1
-    assert args.layernum_max == 2
-    assert args.max_tp_deg == 8
+    assert args.profile_batch_size_step is None
+    assert args.profile_seq_length_step is None
+    assert args.profile_layernum_min == 1
+    assert args.profile_layernum_max == 2
+    assert args.profile_max_tp_deg == 8
     assert args.profile_dp_type == "zero3"
-    assert args.mixed_precision == "bf16"
-    assert args.use_flash_attn is False
-    assert args.shape_order == "SBH"
+    assert args.profile_mixed_precision == "bf16"
 
 
 @pytest.mark.utils
@@ -98,11 +96,10 @@ def test_profiler_hardware_args_defaults():
     assert args.master_port == "$MASTER_PORT"
     assert args.node_rank == "$RANK"
     assert args.max_tp_size == 8
-    assert args.backend == "nccl"
-    assert args.start_mb == 16
-    assert args.end_mb == 512
-    assert args.scale == 2
-    assert args.avg_or_min_or_first == "first"
+    assert args.envs == []
+    assert args.max_pp_deg == 8
+    assert args.overlap_time_multiply == 4
+
 
 
 @pytest.mark.utils

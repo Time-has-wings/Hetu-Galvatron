@@ -7,6 +7,31 @@ from tests.utils.search_configs import (
 from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 from tests.utils.model_utils_new import ModelFactory
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
+from galvatron.utils.hf_config_adapter import model_layer_configs, model_name
+
+
+def _build_hf_test_args(config_json, time_mode):
+    model_ns = SimpleNamespace(
+        model_size=config_json.get("model_size", "llama2-7b"),
+        hf_model_name_or_path=config_json.get("hf_model_name_or_path"),
+        hidden_size=config_json.get("hidden_size"),
+        num_layers=config_json.get("num_hidden_layers", config_json.get("num_layers")),
+        num_attention_heads=config_json.get("num_attention_heads"),
+        ffn_hidden_size=config_json.get("intermediate_size", config_json.get("ffn_hidden_size")),
+        vocab_size=config_json.get("vocab_size"),
+    )
+    train_ns = SimpleNamespace(seq_length=config_json.get("seq_length", 4096))
+    profile_ns = SimpleNamespace(profile_mode=time_mode)
+    return SimpleNamespace(model=model_ns, train=train_ns, profile=profile_ns)
+
+
+def _promote_profile_filenames_to_all(configs_dir: Path, precision: str, model: str):
+    time_src = configs_dir / f"computation_profiling_{precision}_{model}.json"
+    time_dst = configs_dir / f"computation_profiling_{precision}_{model}_all.json"
+    mem_src = configs_dir / f"memory_profiling_{precision}_{model}.json"
+    mem_dst = configs_dir / f"memory_profiling_{precision}_{model}_all.json"
+    shutil.copyfile(time_src, time_dst)
+    shutil.copyfile(mem_src, mem_dst)
 
 # ============= Model Config Tests =============
 @pytest.mark.search_engine

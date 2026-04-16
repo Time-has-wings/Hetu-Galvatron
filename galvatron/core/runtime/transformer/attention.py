@@ -190,7 +190,7 @@ class Attention(torch.nn.Module, ABC):
             )
         
         if self.use_zigzag_cp:
-            assert args.use_flash_attn, "ZigzagRingFlashAttention requires use_flash_attn to be True"
+            assert self.use_flash_attn, "ZigzagRingFlashAttention requires use_flash_attn to be True"
             assert self.attn_mask_type == AttnMaskType.causal, "ZigzagRingFlashAttention is designed for causal attention"
             self.zigzag_ring_flash_attn = build_module(
                 submodules.zigzag_ring_flash_attn,

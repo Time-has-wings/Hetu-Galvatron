@@ -1,0 +1,58 @@
+# batch mode
+model_profiler:
+  profile_type: computation
+  profile_mode: batch
+  profile_unit: all
+  profile_flow_control: all
+  profile_mixed_precision: bf16
+  profile_min_batch_size: 1
+  profile_max_batch_size: 12
+  profile_batch_size_step: 1
+  profile_fixed_seq_length_list: [2048]
+  profile_layernum_min: 2
+  profile_layernum_max: 4
+  runtime_yaml_template_path: scripts/train_dist.yaml
+
+  model_info:
+    model_config_path: ../model_configs/llama2-7b.yaml
+    model_size: llama2-7b
+    is_moe_model: false
+
+
+# sequence mode
+# model_profiler:
+#   profile_type: computation
+#   profile_mode: sequence
+#   profile_unit: all
+#   profile_flow_control: all
+#   profile_mixed_precision: bf16
+#   profile_fixed_batch_size: 1
+#   profile_min_seq_length: 4096
+#   profile_max_seq_length: 32768
+#   profile_seq_length_step: 4096
+#   profile_layernum_min: 1
+#   profile_layernum_max: 2
+#   runtime_yaml_template_path: scripts/train_dist.yaml
+
+#   model_info:
+#     model_config_path: ../model_configs/llama2-7b.yaml
+#     model_size: llama2-7b
+#     is_moe_model: false
+
+# static mode
+# model_profiler:
+#   profile_type: computation
+#   profile_mode: static
+#   profile_unit: all
+#   profile_flow_control: all
+#   profile_mixed_precision: bf16
+#   profile_fixed_batch_size: 4
+#   profile_fixed_seq_length_list: [2048]
+#   profile_layernum_min: 12
+#   profile_layernum_max: 24
+#   runtime_yaml_template_path: scripts/train_dist.yaml
+
+#   model_info:
+#     model_config_path: ../model_configs/llama2-7b.yaml
+#     model_size: llama2-7b
+#     is_moe_model: false

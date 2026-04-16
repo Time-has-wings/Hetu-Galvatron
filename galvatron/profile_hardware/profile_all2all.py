@@ -1,152 +1,185 @@
 import torch
-from torch import nn, Tensor
-from torch.optim import Adam
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import Dataset, DataLoader
 import torch.distributed as dist
-from torch.utils.data.distributed import DistributedSampler
-import numpy as np
-import random
-from tqdm import tqdm
-import time
 import os
-import sys
-from typing import Tuple, List, Any
 import argparse
 
-import galvatron
-from galvatron.core.runtime.pipeline import PipelineParallel, PipeSequential
-from galvatron.core.runtime.comm_groups import gen_comm_groups
 from galvatron.utils import read_json_config, write_json_config
+from galvatron.utils.training_utils import gen_profiling_groups
+
+# Constants
+SEQ_LEN = 512
+HIDDEN_SIZE = 1024
+BYTES_PER_FLOAT16 = 2
+MB_TO_BYTES = 1024 * 1024
+WARMUP_ITERATIONS = 5
+PROFILE_ITERATIONS = 20
+ITERATIONS_PER_MEASUREMENT = 10
+TRIM_EDGES = 5  # Trim first and last N measurements for stability
 
 
-def single_all_to_all(input, group):
+def single_all_to_all(input_tensor, group):
     seq_world_size = dist.get_world_size(group)
-    input_t = input.reshape(seq_world_size, -1)
+    input_t = input_tensor.reshape(seq_world_size, -1)
     output = torch.empty_like(input_t)
     dist.all_to_all_single(output, input_t, group=group)
-
     return output
+
 
 def set_seed(rank):
     seed = 123 + rank
-    np.random.seed(seed)
-    random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
-def train(args):
-    torch.distributed.init_process_group(backend="nccl")
-    local_rank = args.local_rank
-    rank = torch.distributed.get_rank()
-    set_seed(rank)
-    world_size = torch.distributed.get_world_size()
-    node_num = world_size / args.nproc_per_node
-    # assert(args.nproc_per_node == 8)
-    torch.cuda.set_device(local_rank)
-    device = torch.device("cuda", local_rank)
 
-    pp_deg = args.pp_deg
-    args.num_layers = 24
-    # args.local_batch_size = 32
-    train_batch_size_input = args.local_batch_size
-    if rank == 0:
-        print('local_bsz = %d'%train_batch_size_input)
+def _profile_all2all_one(
+    rank,
+    local_rank,
+    device,
+    world_size,
+    node_num,
+    nproc_per_node,
+    batch_size,
+    seq_len,
+    hidden_size,
+    tp_size,
+    comm_group,
+    save_config,
+):
+    tp_consec = 1
+    all2all_message_size = (
+        (batch_size * seq_len * hidden_size * BYTES_PER_FLOAT16 / MB_TO_BYTES) * (tp_size - 1) / tp_size
+    )
 
-    tp_size = args.global_tp_deg
-
-    all_tp_sizes = [args.global_tp_deg] * 24
-    all_sp_sizes = [1] * 24
-    all_cp_sizes = [1] * 24
-    all_ep_sizes = [1] * 24
-    all_tp_of_ep_sizes = [1] * 24
-    tp_consecutive_flags = [args.global_tp_consec] * 24
-    pp_group, tp_groups, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, all_ep_sizes, all_tp_of_ep_sizes, pp_deg, tp_consecutive_flags)
-
-    # Calculate theoretical communication message size
-    tp_size = args.global_tp_deg
-    pp_size = args.pp_deg
-    dp_size = world_size // pp_deg // tp_size
-    bs = args.local_batch_size
-    # per size: 1MB * bs when profile time == 1
-    all2all_message_size_per_layer = (bs*512*1024*2/1024/1024)
-    all2allmessage_size_total = all2all_message_size_per_layer * 24 // pp_deg
     if local_rank == 0:
-        print('Strategy: %d_%d_%d'%(pp_size,tp_size,args.global_tp_consec))
-        print('[all2all_message_size]: per_layer %d MB, total %d MB'%(all2all_message_size_per_layer,all2allmessage_size_total))
+        print(f"Strategy: {tp_size}_{tp_consec}")
+        print(f"[all2all_message_size]: per_layer {all2all_message_size:.2f} MB")
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
     time_list = []
-    for _ in range(5):
-        input = np.random.rand(*(bs, 512, 1024))
-        input = torch.tensor(input, dtype=torch.bfloat16, device=device)
-        output = single_all_to_all(input, tp_groups[0].group)
-    
-    # torch.cuda.cudart().cudaProfilerStart()
-    for _ in range(20):
-        input = np.random.rand(*(bs, 512, 1024))
-        input = torch.tensor(input, dtype=torch.bfloat16, device=device)
+
+    for _ in range(WARMUP_ITERATIONS):
+        input_tensor = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16, device=device)
+        single_all_to_all(input_tensor, comm_group)
+
+    for _ in range(PROFILE_ITERATIONS):
+        input_tensor = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16, device=device)
         torch.cuda.synchronize()
-        torch.distributed.barrier(group=tp_groups[0].group)
+        torch.distributed.barrier(group=comm_group)
         start.record()
-        output = single_all_to_all(input, tp_groups[0].group)
+        for __ in range(ITERATIONS_PER_MEASUREMENT):
+            single_all_to_all(input_tensor, comm_group)
         end.record()
         torch.cuda.synchronize()
-        print(f"device: {local_rank}, time: {start.elapsed_time(end)}")
-        time_list.append(start.elapsed_time(end))
-    # torch.cuda.cudart().cudaProfilerStop()
-    
-    if args.profile_time == 0:
-        assert False
+        time_list.append(start.elapsed_time(end) / ITERATIONS_PER_MEASUREMENT)
+
+    time_list = sorted(time_list)
+    per_comm_time = sum(time_list[TRIM_EDGES:-TRIM_EDGES]) / len(time_list[TRIM_EDGES:-TRIM_EDGES])
+    per_comm_time = torch.tensor([per_comm_time]).to(device)
+    torch.distributed.all_reduce(per_comm_time, group=comm_group, op=torch.distributed.ReduceOp.SUM)
+    per_comm_time = per_comm_time.cpu().numpy()[0] / tp_size
+
+    if rank == 0:
+        print(f"Total time: {sum(time_list):.4f} ms, Measurements: {len(time_list)}")
+        print("**********")
+        print(f"comm_time_{batch_size}MB_{tp_size}: {per_comm_time:.4f} ms")
+        print("**********")
+        key = f"all2all_size_{tp_size}_{batch_size}MB_time"
+        env_config_path = save_config("./hardware_configs/sp_time_%dnodes_%dgpus_per_node.json", key, per_comm_time)
+        print(f"Already written all2all time into env config file {env_config_path}!")
+    dist.barrier(device_ids=[local_rank])
+
+
+def train(args):
+    if hasattr(args, "local_rank") and args.local_rank >= 0:
+        local_rank = args.local_rank
     else:
-        per_comm_time = sum(time_list) / len(time_list)
-        per_comm_time = torch.tensor([per_comm_time]).to(device)
-        torch.distributed.all_reduce(per_comm_time, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
-        per_comm_time = per_comm_time.cpu().numpy()[0] / tp_groups[0].size
-        if rank == 0:
-            print(sum(time_list), len(time_list))
-            print('**********')
-            print('comm_time_%dMB_%d_%d:'%(args.local_batch_size, pp_size, tp_size), per_comm_time)
-            print('**********')
-            path = os.path.dirname(os.path.abspath(__file__))
-            env_config_path = os.path.join(path, './hardware_configs/sp_time_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
-            config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
-            key = 'all2all_size_%d_%dMB_time'%(tp_size,args.local_batch_size)
-            config[key] = per_comm_time
-            write_json_config(config, env_config_path)
-            print('Already written all2all bandwidth into env config file %s!'%(env_config_path))
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    device_id = local_rank
+    torch.cuda.set_device(device_id)
+    device = torch.device("cuda", device_id)
+
+    torch.distributed.init_process_group(backend="nccl")
+    rank = torch.distributed.get_rank()
+    set_seed(rank)
+    world_size = torch.distributed.get_world_size()
+    nproc_per_node_arg = getattr(args, "nproc_per_node", -1)
+    nproc_per_node = nproc_per_node_arg if nproc_per_node_arg and nproc_per_node_arg > 0 else int(
+        os.environ.get("LOCAL_WORLD_SIZE", 1)
+    )
+    node_num = world_size // nproc_per_node
+
+    seq_len = int(getattr(args, "seq_length", SEQ_LEN))
+    hidden_size = int(getattr(args, "hidden_size", HIDDEN_SIZE))
+    tp_list = args.global_tp_deg
+    batch_list = args.local_batch_size
+
+    def save_config(filename_template, key, value):
+        path = os.path.dirname(os.path.abspath(__file__))
+        env_config_path = os.path.join(path, filename_template % (node_num, nproc_per_node))
+        config = read_json_config(env_config_path) if os.path.exists(env_config_path) else {}
+        config[key] = value
+        write_json_config(config, env_config_path)
+        return env_config_path
+
+    if rank == 0:
+        jobs = [(t, b) for t in tp_list for b in batch_list]
+        print(f"[global_tp_deg x local_batch_size] world_size={world_size}, {len(jobs)} configs: {jobs}")
+
+    comm_by_tp = {}
+
+    def comm_for_tp(tp_size: int):
+        if tp_size not in comm_by_tp:
+            comm_by_tp[tp_size] = gen_profiling_groups(tp_size, 1)
+        return comm_by_tp[tp_size]
+
+    for tp_size in tp_list:
+        if world_size % tp_size != 0:
+            raise SystemExit(f"--global_tp_deg value {tp_size} must divide world_size {world_size}")
+        comm_group = comm_for_tp(tp_size)
+        for batch_size in batch_list:
+            torch.cuda.synchronize()
+            dist.barrier(device_ids=[local_rank])
+            _profile_all2all_one(
+                rank,
+                local_rank,
+                device,
+                world_size,
+                node_num,
+                nproc_per_node,
+                batch_size,
+                seq_len,
+                hidden_size,
+                tp_size,
+                comm_group,
+                save_config,
+            )
+
+    torch.distributed.barrier(device_ids=[local_rank])
+    torch.distributed.destroy_process_group()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--global_tp_deg", type=int, default=-1, help="Global tensor parallel degree.", choices=[-1,1,2,4,8,16,32,64,128,256],
+        "--global_tp_deg",
+        nargs="+",
+        type=int,
+        required=True,
+        metavar="DEG",
+        help="Tensor parallel degree(s), e.g. 8 4 2, for a Cartesian sweep with --local_batch_size.",
     )
     parser.add_argument(
-        "--global_tp_consec", type=int, default=-1, help="Global tensor parallel group consecutive flag."
+        "--local_batch_size",
+        nargs="+",
+        type=int,
+        required=True,
+        metavar="N",
+        help="Local batch size(s), e.g. 32 or 1024 512 ....",
     )
-    parser.add_argument(
-        "--pp_deg", type=int, default=2, help="Pipeline parallel degree.", choices=[1,2,4,8,16,32,64,128,256],
-    )
-    parser.add_argument(
-        "--local_batch_size", type=int, default=32, help="local training batch size"
-    )
-    parser.add_argument(
-        "--num_layers", type=int, default=24, help="Number of layers"
-    )
-    parser.add_argument("--local-rank" ,type=int,default=-1)
-    parser.add_argument(
-        "--nproc_per_node", type=int, default=-1, help="Nproc per node",
-    )
-    parser.add_argument(
-        "--profile_time", type=int, default=0, help="Profile time",
-    )
+    parser.add_argument("--seq_length", type=int, default=512, help="Sequence length")
+    parser.add_argument("--hidden_size", type=int, default=1024, help="Hidden size")
+
     args = parser.parse_args()
-    from megatron.training.global_vars import set_args
-    args.sequence_parallel = False
-    args.shape_order = "SBH"
-    args.use_ulysses = False
-    args.async_grad_reduce = True
-    set_args(args)
     train(args)

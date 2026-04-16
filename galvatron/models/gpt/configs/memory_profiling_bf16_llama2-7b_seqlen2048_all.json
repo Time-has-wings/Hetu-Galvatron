@@ -1,0 +1,10 @@
+{
+    "1_1_8_sp": {
+        "layernum[1]_bsz8_seq2048_rank0_ms": 1154.32177734375,
+        "layernum[1]_bsz8_seq2048_rank0_act": 457.3173828125,
+        "layernum[1]_bsz8_seq2048_rank0_act_peak": 1917.3095703125,
+        "layernum[1]_bsz8_seq2048_rank7_ms": 1154.32177734375,
+        "layernum[1]_bsz8_seq2048_rank7_act": 457.3173828125,
+        "layernum[1]_bsz8_seq2048_rank7_act_peak": 1917.3095703125
+    }
+}

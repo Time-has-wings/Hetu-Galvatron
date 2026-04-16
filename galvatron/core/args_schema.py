@@ -19,7 +19,7 @@ from .runtime.args_schema import (
 )
 
 # Profiler args
-from .profiler.args_schema import ProfilerArgs, ProfilerHardwareArgs
+from .profiler.args_schema import ProfilerHardwareArgs, GalvatronModelProfilerArgs
 
 # Search engine args
 from .search_engine.args_schema import GalvatronSearchArgs
@@ -35,8 +35,8 @@ __all__ = [
     "CommonDataArgs",
     "CommonCkptArgs",
     # Profiler
-    "ProfilerArgs",
     "ProfilerHardwareArgs",
+    "GalvatronModelProfilerArgs",
     # Search engine
     "SearchEngineArgs",
     # Merged
@@ -48,6 +48,6 @@ class CoreArgs(BaseModel):
     """Combined args: one of runtime, profiler, search, or tools is typically used per run."""
 
     runtime: Optional[GalvatronRuntimeArgs] = Field(default=None, description="Training/runtime args")
-    profiler: Optional[ProfilerArgs] = Field(default=None, description="Profiler args")
     profiler_hardware: Optional[ProfilerHardwareArgs] = Field(default=None, description="Hardware profiler args")
     search_engine: Optional[GalvatronSearchArgs] = Field(default=None, description="Search engine args")
+    model_profiler: Optional[GalvatronModelProfilerArgs] = Field(default=None, description="Model profiler args")
