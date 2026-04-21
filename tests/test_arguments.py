@@ -6,7 +6,7 @@ builders; those entry points were removed in favor of ``load_with_hydra`` and
 
 - **YAML + Hydra**: ``train_dist.yaml`` → ``GalvatronRuntimeArgs`` (``mode="train_dist"``).
 - **Standalone schemas**: defaults of ``ProfilerArgs``, ``ProfilerHardwareArgs``,
-  ``SearchEngineArgs`` mirror the old argparse default assertions where the schema
+  ``GalvatronSearchArgs`` mirror the old argparse default assertions where the schema
   still matches.
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from galvatron.core.arguments import load_with_hydra
-from galvatron.core.args_schema import ProfilerHardwareArgs, SearchEngineArgs
+from galvatron.core.args_schema import ProfilerHardwareArgs, GalvatronSearchArgs
 from galvatron.core.profiler.args_schema import GalvatronModelProfilerArgs
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,23 +33,22 @@ def test_load_with_hydra_train_dist_runtime_matches_yaml():
     assert args.parallel.pipeline_type == "gpipe"
     assert args.parallel.mixed_precision == "bf16"
 
-    assert args.model.model_type == "gpt"
+    assert args.model.model_type == "llama"
     assert args.model.model_size == "llama2-7b"
-    assert args.model.num_layers == 4
 
     assert args.profile.profile == 1
     assert args.profile.profile_mode == "static"
     assert args.profile.profile_unit == "all"
     assert args.profile.save_profiled_memory == 0
-    assert args.profile.exit_after_profiling == 1
+    assert args.profile.exit_after_profiling == 0
 
     assert args.train.train_iters == 20
     assert args.train.eval_iters == 1
     assert args.train.lr == pytest.approx(6.0e-4)
     assert args.train.min_lr == pytest.approx(6.0e-5)
     assert args.train.global_batch_size == 32
-    assert args.train.micro_batch_size == 4
-    assert args.train.seq_length == 1024
+    assert args.train.micro_batch_size == 1
+    assert args.train.seq_length == 4096
 
     assert args.data.split == "949,50,1"
     assert args.data.tokenizer_type == "HuggingFaceTokenizer"
@@ -105,20 +104,17 @@ def test_profiler_hardware_args_defaults():
 @pytest.mark.utils
 def test_search_engine_args_defaults():
     """Defaults aligned with former ``galvatron_search_args`` expectations."""
-    args = SearchEngineArgs()
-    assert args.num_nodes == 1
-    assert args.num_gpus_per_node == 8
-    assert args.memory_constraint == 24
-    assert args.min_bsz == 8
-    assert args.max_bsz == 10240
-    assert args.bsz_scale == 8
-    assert args.search_space == "full"
-    assert args.sp_space == "tp"
-    assert args.max_tp_deg == 8
-    assert args.max_pp_deg == 8
-    assert args.default_dp_type == "ddp"
-    assert args.mixed_precision == "bf16"
-    assert args.pipeline_type == "gpipe"
-    assert args.use_pipeline_costmodel == 1
-    assert args.costmodel_coe == 1.0
-    assert args.fine_grained_mode == 1
+    args = GalvatronSearchArgs()
+    assert args.hardware_info.num_nodes == 1
+    assert args.hardware_info.num_gpus_per_node == 8
+    assert args.hardware_info.memory_constraint == 24
+    assert args.batch_size_info.min_bsz == 8
+    assert args.batch_size_info.max_bsz == 8
+    assert args.batch_size_info.bsz_scale == 8
+    assert args.search_space_info.max_tp_deg == 8
+    assert args.search_space_info.max_pp_deg == 8
+    assert args.parallelism_info.default_dp_type == "ddp"
+    assert args.parallelism_info.mixed_precision == "bf16"
+    assert args.parallelism_info.pipeline_type == "gpipe"
+    assert args.debug_info.debug_costmodel_coe == 1.0
+    assert args.options_info.fine_grained_mode == 1

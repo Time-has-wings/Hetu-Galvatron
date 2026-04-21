@@ -23,8 +23,8 @@ def show_groups(groups:List[CommGroup]):
     print()
 
 
-def build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tsp'):
-    assert sorted(name2size.keys()) == sorted(['pp', 'dp', 'cp', 'tsp']) or sorted(name2size.keys()) == sorted(['pp', 'ep', 'edp', 'etp']), f'name2size keys must be pp, dp, cp, tsp or pp, ep, edp, etp'
+def build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tp-sp'):
+    assert sorted(name2size.keys()) == sorted(['pp', 'dp', 'cp', 'tp', 'sp']) or sorted(name2size.keys()) == sorted(['pp', 'ep', 'edp', 'etp']), f'name2size keys must be pp, dp, cp, tp, sp or pp, ep, edp, etp'
     
     name_list = order.split('-')
     stride_list = [1] * len(name_list)
@@ -137,26 +137,21 @@ def gen_comm_groups(
             'pp': pp_size,
             'dp': dp_size,
             'cp': all_cp_sizes[i],
-            'tsp': all_tp_sizes[i] * all_sp_sizes[i],
+            'tp': all_tp_sizes[i],
+            'sp': all_sp_sizes[i],
         }
-        degree_rank_dict = build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tsp')
+        degree_rank_dict = build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tp-sp')
         
         if i == 0:
             pp_group, _ = get_groups(degree_rank_dict, ignore_keys=['pp'])
             embedding_group = get_embedding_group(pp_size, pp_group)
 
-        if all_sp_sizes[i] > 1:
-            tp_group = None
-            sp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tsp'])
-            sdp_group, _ = get_groups(degree_rank_dict, ignore_keys=['dp', 'tsp'])
-        else:
-            tp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tsp'])
-            sp_group = None
-            sdp_group, _ = get_groups(degree_rank_dict, ignore_keys=['dp'])
-            
+        tp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tp'])
+        sp_group, _ = get_groups(degree_rank_dict, ignore_keys=['sp'])
+        sdp_group, _ = get_groups(degree_rank_dict, ignore_keys=['dp', 'sp'])
         cp_group, _ = get_groups(degree_rank_dict, ignore_keys=['cp'])
         dp_group, _ = get_groups(degree_rank_dict, ignore_keys=['dp'])
-        tsp_cp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tsp', 'cp'])
+        tsp_cp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tp', 'sp', 'cp'])
 
         tp_groups.append(tp_group)
         sp_groups.append(sp_group)

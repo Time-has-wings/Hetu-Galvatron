@@ -26,7 +26,7 @@ def _reset_profiler_caches(profiler):
 @pytest.fixture
 def base_profiler(profiler_model_configs_dir):
     """Create base profiler instance"""
-    profiler = initialize_model_profile_profiler(profiler_model_configs_dir, "llama_search", "hf")
+    profiler = initialize_model_profile_profiler(profiler_model_configs_dir, "llama_search")
     return profiler
 
 

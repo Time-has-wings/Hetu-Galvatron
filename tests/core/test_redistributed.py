@@ -10,7 +10,7 @@ from torch.nn import CrossEntropyLoss
 
 from tests.utils.init_dist import init_dist_env
 from tests.utils.runtime_args import make_test_args
-from tests.models.configs.get_config_json import ConfigFactory
+from tests.utils.model_utils import ModelFactory
 
 from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
 from galvatron.core.runtime.models.builder import build_model
@@ -37,11 +37,11 @@ def _run_test(test_args: Dict[str, Any]):
     set_seed(seed)
 
     # Derive model sizes (gpt / gpt256) to match HF baseline.
-    cfg = ConfigFactory.get_config_json(model_type)
-    hidden_size = cfg["n_embd"]
-    num_layers = cfg["n_layer"]
-    num_attention_heads = cfg["n_head"]
-    seq_length = cfg["n_positions"]
+    cfg = ModelFactory.get_test_config(model_type)
+    hidden_size = cfg["hidden_size"]
+    num_layers = cfg["num_layers"]
+    num_attention_heads = cfg["num_attention_heads"]
+    seq_length = cfg["seq_length"]
     vocab_size = cfg["vocab_size"]
     ffn_hidden_size = hidden_size * 4
 

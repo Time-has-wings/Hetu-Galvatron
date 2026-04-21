@@ -3,7 +3,7 @@ from typing import Dict
 from pathlib import Path
 from pydantic import BaseModel
 # from tests.utils.search_args import SearchArgs
-from tests.utils.model_utils_new import ModelFactory
+from tests.utils.model_utils import ModelFactory
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
 from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 
@@ -644,7 +644,7 @@ def _auto_update_nested_args(model: BaseModel, flat_updates: Dict) -> BaseModel:
         setattr(model, child_name, child.model_copy(update=updates))
     return model
 
-def initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode = "static", memory_mode = "static", sp_enabled = False, seqlen_list = None, **kwargs):
+def initialize_search_engine(base_config_dirs, base_log_dirs, model_type, time_mode = "static", memory_mode = "static", sp_enabled = False, seqlen_list = None, **kwargs):
     """Initialize search engine"""
     configs_dir, hardware_dir, output_dir = base_config_dirs
 
@@ -668,7 +668,7 @@ def initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backen
     if kwargs:
         args = _auto_update_nested_args(args, kwargs)
     
-    ModelFactory.resolve_model_config(args, model_type, backend)
+    ModelFactory.resolve_model_config(args, model_type)
     model_layer_configs_func = ModelFactory.get_model_layer_configs_func()
     model_name_func = ModelFactory.get_model_name_func()
 

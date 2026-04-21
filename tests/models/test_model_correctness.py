@@ -20,7 +20,7 @@ from galvatron.core.runtime.models.builder import build_model
 from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
 from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_gpt, convert_checkpoints_llama
 from galvatron.utils.training_utils import distributed_dataloader, set_seed
-from tests.models.configs.get_config_json import ConfigFactory
+from tests.utils.model_utils import ModelFactory
 from tests.utils.init_dist import init_dist_env
 from tests.utils.runtime_args import make_test_args
 
@@ -65,10 +65,10 @@ def _run_test(test_args: Dict[str, Any]):
     device = torch.device("cuda", rank)
     set_seed(seed)
 
-    cfg = ConfigFactory.get_config_json(hf_arch)
+    cfg = ModelFactory.get_test_config(hf_arch)
 
     if hf_arch == "gpt":
-        n_layer = cfg["n_layer"]
+        n_layer = cfg["num_layers"]
         parallel_config = _dp_parallel_config(n_layer, batch_size, chunks)
         args = make_test_args(
             hf_arch="gpt",
@@ -81,11 +81,11 @@ def _run_test(test_args: Dict[str, Any]):
             global_batch_size=batch_size,
             chunks=chunks,
             seed=seed,
-            seq_length=cfg["n_positions"],
-            hidden_size=cfg["n_embd"],
+            seq_length=cfg["seq_length"],
+            hidden_size=cfg["hidden_size"],
             num_layers=n_layer,
-            num_attention_heads=cfg["n_head"],
-            ffn_hidden_size=cfg["n_embd"] * 4,
+            num_attention_heads=cfg["num_attention_heads"],
+            ffn_hidden_size=cfg["hidden_size"] * 4,
             vocab_size=cfg["vocab_size"],
         )
         hf_config = GPT2Config(
@@ -110,20 +110,20 @@ def _run_test(test_args: Dict[str, Any]):
             convert_checkpoints_gpt(checkpoint_dir["baseline"], checkpoint_dir["converted"])
             baseline_model = baseline_model.to(device)
     else:
-        n_layer = cfg["n_layers"]
-        n_heads = cfg["n_heads"]
-        n_kv = cfg.get("n_kv_heads", n_heads)
+        n_layer = cfg["num_layers"]
+        n_heads = cfg["num_attention_heads"]
+        n_kv = cfg.get("num_query_groups", n_heads)
         gqa = n_kv < n_heads
         parallel_config = _dp_parallel_config(n_layer, batch_size, chunks)
         hf_config = LlamaConfig(
-            hidden_size=cfg["dim"],
+            hidden_size=cfg["hidden_size"],
             num_hidden_layers=n_layer,
             num_attention_heads=n_heads,
             num_key_value_heads=n_kv,
-            intermediate_size=cfg["dim"] * 4,
+            intermediate_size=cfg["hidden_size"] * 4,
             vocab_size=cfg["vocab_size"],
-            max_position_embeddings=cfg["n_positions"],
-            rms_norm_eps=cfg["norm_eps"],
+            max_position_embeddings=cfg["seq_length"],
+            rms_norm_eps=cfg["norm_epsilon"],
         )
         args = make_test_args(
             hf_arch=hf_arch,
@@ -136,15 +136,15 @@ def _run_test(test_args: Dict[str, Any]):
             global_batch_size=batch_size,
             chunks=chunks,
             seed=seed,
-            seq_length=cfg["n_positions"],
-            hidden_size=cfg["dim"],
+            seq_length=cfg["seq_length"],
+            hidden_size=cfg["hidden_size"],
             num_layers=n_layer,
             num_attention_heads=n_heads,
             ffn_hidden_size=hf_config.intermediate_size,
             vocab_size=cfg["vocab_size"],
             group_query_attention=gqa,
             num_query_groups=n_kv if gqa else None,
-            norm_epsilon=cfg["norm_eps"],
+            norm_epsilon=cfg["norm_epsilon"],
         )
         if rank == last:
             baseline_model = LlamaForCausalLM(hf_config)
@@ -225,15 +225,13 @@ def _run_test(test_args: Dict[str, Any]):
 @pytest.mark.distributed
 @pytest.mark.model
 @pytest.mark.parametrize("hf_arch", ["gpt", "llama", "llama2"])
-@pytest.mark.parametrize("backend", ["hf"])
 @pytest.mark.parametrize("dp_size", [8])
-def test_dp_correctness(run_distributed, hf_arch, backend, dp_size, checkpoint_dir):
+def test_dp_correctness(run_distributed, hf_arch, dp_size, checkpoint_dir):
     run_distributed(
         func_name="_run_test",
         world_size=dp_size,
         args={
             "hf_arch": hf_arch,
-            "backend": backend,
             "dp_size": dp_size,
             "batch_size": 16,
             "chunks": 2,

@@ -8,11 +8,11 @@ from tests.utils.search_configs import (
 from galvatron.utils.strategy_utils import config2strategy
 
 @pytest.mark.search_engine
-@pytest.mark.parametrize("idx, model_type,backend,time_mode,memory_mode,sp_enabled,settle_bsz, settle_chunk, memory_constraint, seqlen_list, fine_grained_mode", [
-    (0, "llama_search", "hf", "sequence", "sequence", True, 64, 32, 36, [8192], 1),
-    (1, "llama_search", "hf", "sequence", "sequence", True, 64, 8, 36, [8192], 0),
+@pytest.mark.parametrize("idx, model_type,time_mode,memory_mode,sp_enabled,settle_bsz, settle_chunk, memory_constraint, seqlen_list, fine_grained_mode", [
+    (0, "llama_search", "sequence", "sequence", True, 64, 32, 36, [8192], 1),
+    (1, "llama_search", "sequence", "sequence", True, 64, 8, 36, [8192], 0),
 ])
-def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, backend, time_mode, memory_mode, sp_enabled, settle_bsz, settle_chunk, memory_constraint, seqlen_list, fine_grained_mode):
+def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, time_mode, memory_mode, sp_enabled, settle_bsz, settle_chunk, memory_constraint, seqlen_list, fine_grained_mode):
     
     kwargs = {
         "settle_bsz": settle_bsz,
@@ -26,7 +26,7 @@ def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, bac
         'num_layers': 28,
     }
 
-    search_engine = initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode, memory_mode, sp_enabled, seqlen_list, **kwargs)
+    search_engine = initialize_search_engine(base_config_dirs, base_log_dirs, model_type, time_mode, memory_mode, sp_enabled, seqlen_list, **kwargs)
     
 
     

@@ -1,13 +1,12 @@
 from galvatron.core.profiler import HardwareProfiler, ModelProfiler, RuntimeProfiler
 from galvatron.core.profiler.args_schema import GalvatronModelProfilerArgs, ProfilerHardwareArgs
-from galvatron.core.runtime.args_schema import GalvatronModelArgs
-from tests.models.configs.get_config_json import ConfigFactory
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs, GalvatronModelArgs
 from tests.utils.model_utils import ModelFactory
 
 
-def initialize_model_profile_profiler(profiler_model_configs_dir, model_type, backend, **kwargs):
+def initialize_model_profile_profiler(profiler_model_configs_dir, model_type, **kwargs):
     """Build a ModelProfiler with Pydantic args matching production (Hydra / args_schema)."""
-    _ = (model_type, backend)  # fixture API compatibility
+    _ = model_type  # fixture API compatibility
     defaults = dict(
         profile_type="memory",
         profile_mode="static",
@@ -21,7 +20,7 @@ def initialize_model_profile_profiler(profiler_model_configs_dir, model_type, ba
         profile_batch_size_step=1,
         profile_seq_length_step=128,
         profile_max_tp_deg=8,
-        runtime_yaml_template_path="scripts/train_dist.yaml",
+        runtime_yaml_template_path="scripts/profile_runtime.yaml",
         model_info=GalvatronModelArgs(model_size="test_model"),
     )
     defaults.update(kwargs)
@@ -30,33 +29,35 @@ def initialize_model_profile_profiler(profiler_model_configs_dir, model_type, ba
     profiler.set_profiler_launcher(str(profiler_model_configs_dir.parent), model_name="test")
     return profiler
 
-def initialize_hardware_profile_profiler(profiler_hardware_configs_dir):
-    """Initialize profiler"""
 
-    # Setup search engine
+def initialize_hardware_profile_profiler(profiler_hardware_configs_dir):
+    """Initialize hardware profiler."""
     args = ProfilerHardwareArgs()
     profiler = HardwareProfiler(args)
     profiler.set_path(profiler_hardware_configs_dir)
     return profiler
 
-def initialize_runtime_profile_profiler(profiler_model_configs_dir, model_type, backend, **kwargs):
-    """Initialize profiler"""
 
-    # Setup search engine
-    class DummyArgs:
-        def __init__(self):
-            self.profile = True
-            self.mixed_precision = 'bf16'
-            self.set_model_config_manually = False
-            self.set_layernum_manually = False
-            self.set_seqlen_manually = False
-    args = DummyArgs()
-    model_layer_configs, model_name = ModelFactory.get_meta_configs(model_type, backend)
-    config_json = ConfigFactory.get_config_json(model_type)
-    args.model_size = config_json
-    config = ModelFactory.create_config(model_type, backend, args, False)
+def initialize_runtime_profile_profiler(profiler_model_configs_dir, model_type, **kwargs):
+    """Initialize runtime profiler via ModelFactory."""
+    args = GalvatronRuntimeArgs()
+    args.profile.profile = True
+
+    # Resolve model config (loads from YAML via ModelFactory)
+    ModelFactory.resolve_model_config(args, model_type)
+
+    # Get layer configs and model name via ModelFactory
+    layer_configs = ModelFactory.get_model_layer_configs(args)
+    name = ModelFactory.get_model_name(args)
+
     # Initialize profiler
     profiler = RuntimeProfiler(args)
-    profiler.set_profiler_dist(profiler_model_configs_dir.parent, model_layer_configs(config), model_type, rank = 0, profile_ranks = [0], **kwargs)
-    
+    profiler.set_profiler_dist(
+        str(profiler_model_configs_dir.parent),
+        layer_configs,
+        name,
+        rank=0,
+        profile_ranks=[0],
+        **kwargs,
+    )
     return profiler

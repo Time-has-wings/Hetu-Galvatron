@@ -317,6 +317,7 @@ class CommonDataArgs(BaseModel):
     reset_attention_mask: bool = Field(default=False, description="Whether to reset attention mask after end-of-document token.")
     eod_mask_loss: bool = Field(default=False, description="Whether to mask loss for end-of-document tokens.")
     create_attention_mask_in_dataloader: bool = Field(default=False, description="Whether to create attention mask in dataloader.")
+    use_random_dataset: bool = Field(default=False, description="Use random synthetic data instead of real dataset for profiling.")
 
 
 class CommonCkptArgs(BaseModel):
@@ -334,7 +335,7 @@ class CommonCkptArgs(BaseModel):
 class LoggingConfig(BaseModel):
     """Logging config."""
 
-    tensorboard_dir: str = Field(default=None, description="Path to save the tensorboard logs.")
+    tensorboard_dir: Optional[str] = Field(default=None, description="Path to save the tensorboard logs.")
     tensorboard_queue_size: int = Field(default=1000, ge=1, description="Size of the tensorboard queue for pending events and summaries before one of the ‘add’ calls forces a flush to disk.")
     wandb_project: str = Field(default='', description="The wandb project name. Ignore wandb by default.")
     wandb_exp_name: str = Field(default='', description="The wandb experiment name.")

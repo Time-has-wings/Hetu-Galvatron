@@ -23,7 +23,6 @@ from .profiler.args_schema import ProfilerHardwareArgs, GalvatronModelProfilerAr
 
 # Search engine args
 from .search_engine.args_schema import GalvatronSearchArgs
-
 __all__ = [
     # Runtime
     "GalvatronParallelArgs",
@@ -38,7 +37,7 @@ __all__ = [
     "ProfilerHardwareArgs",
     "GalvatronModelProfilerArgs",
     # Search engine
-    "SearchEngineArgs",
+    "GalvatronSearchArgs",
     # Merged
     "CoreArgs",
 ]

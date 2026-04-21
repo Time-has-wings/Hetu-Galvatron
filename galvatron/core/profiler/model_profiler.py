@@ -165,6 +165,7 @@ class ModelProfiler(BaseProfiler):
                     'runtime.model.model_config_path': args.model_info.model_config_path,
                     'runtime.model.set_layernum_manually': 1,
                     'runtime.model.set_seqlen_manually': 1,
+                    'runtime.data.use_random_dataset': True,
                 }
             else:
                 global_batch_size_list = self.get_global_batch_size_list()
@@ -190,6 +191,7 @@ class ModelProfiler(BaseProfiler):
                     'runtime.model.model_config_path': args.model_info.model_config_path,
                     'runtime.model.set_layernum_manually': 1,
                     'runtime.model.set_seqlen_manually': 1,
+                    'runtime.data.use_random_dataset': True,
                 }
         
         return self.basic_overrides_dict

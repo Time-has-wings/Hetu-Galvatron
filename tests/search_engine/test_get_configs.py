@@ -1,3 +1,5 @@
+from pathlib import Path
+from types import SimpleNamespace
 import pytest
 from tests.utils.search_configs import (
     write_time_config,
@@ -5,7 +7,7 @@ from tests.utils.search_configs import (
     write_hardware_config
 )
 from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
-from tests.utils.model_utils_new import ModelFactory
+from tests.utils.model_utils import ModelFactory
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
 from galvatron.utils.hf_config_adapter import model_layer_configs, model_name
 
@@ -36,7 +38,6 @@ def _promote_profile_filenames_to_all(configs_dir: Path, precision: str, model: 
 # ============= Model Config Tests =============
 @pytest.mark.search_engine
 @pytest.mark.parametrize("model_type", ["gpt"])
-@pytest.mark.parametrize("backend", ["hf"])
 @pytest.mark.parametrize("time_mode,memory_mode,sp_enabled", [
     ("static", "static", False),
     ("batch", "static", False),
@@ -48,16 +49,13 @@ def _promote_profile_filenames_to_all(configs_dir: Path, precision: str, model: 
     ("batch", "sequence", True),
     ("sequence", "sequence", True),
 ])
-def test_config_loading(base_config_dirs, model_type, backend, time_mode, memory_mode, sp_enabled):
+def test_config_loading(base_config_dirs, model_type, time_mode, memory_mode, sp_enabled):
     """Test loading both time and memory configs with different modes"""
     _, configs_dir, _ = base_config_dirs
 
     # Setup search engine
     args = GalvatronSearchArgs()
-    # model_layer_configs, model_name = ModelFactory.get_meta_configs(model_type, backend)
-    # config_json = ConfigFactory.get_config_json(model_type)
     # args.model_info.model_size = config_json
-    # config = ModelFactory.create_config(model_type, backend, args)
     
 
     args.profiling_info.time_profiling_path = str(configs_dir)
@@ -66,7 +64,7 @@ def test_config_loading(base_config_dirs, model_type, backend, time_mode, memory
     args.profiling_info.memory_profile_mode = memory_mode
     args.common_train_info.sequence_parallel = sp_enabled
 
-    ModelFactory.resolve_model_config(args, model_type, backend)
+    ModelFactory.resolve_model_config(args, model_type)
     model_layer_configs_func = ModelFactory.get_model_layer_configs_func()
     model_name_func = ModelFactory.get_model_name_func()
     

@@ -1,6 +1,5 @@
 import json
 import os
-from .strategy_utils import form_strategy
 from typing import Sequence
 import numpy as np
 from scipy.optimize import curve_fit
@@ -37,7 +36,7 @@ def config2strategy(config):
     else:
         vcp = 1
     tp_sizes_enc = str2array(config['tp_sizes_enc'])
-    cp_sizes_enc = str2array(config['cp_sizes_enc'])
+    cp_sizes_enc = str2array(config['cp_sizes_enc']) if 'cp_sizes_enc' in config else [1] * len(tp_sizes_enc)
     tp_consecutive_flags = str2array(config['tp_consecutive_flags'])
     dp_types_enc = str2array(config['dp_types_enc'])
     if "use_sp" in config:

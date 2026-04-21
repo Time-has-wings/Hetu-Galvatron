@@ -1,13 +1,13 @@
 NUM_NODES: 1
 NUM_GPUS_PER_NODE: 8
-MEMORY_CONSTRAINT: 36
+MEMORY_CONSTRAINT: 38
 
-SEQ_LENGTH: 2048
+SEQ_LENGTH: 8192
 LOG_DIR: ./logs/search_engine
 
 search_engine:
   profiling_info:
-    time_profile_mode: batch
+    time_profile_mode: sequence
     memory_profile_mode: static
 
   model_info:
@@ -15,9 +15,8 @@ search_engine:
     model_size: llama2-7b
     is_moe_model: false
     set_model_config_manually: 0
-    set_layernum_manually: 1
+    set_layernum_manually: 0
     set_seqlen_manually: 1
-    num_layers: 32
 
   common_train_info:
     seq_length: ${SEQ_LENGTH}
@@ -34,11 +33,11 @@ search_engine:
     num_nodes: ${NUM_NODES}
     num_gpus_per_node: ${NUM_GPUS_PER_NODE}
     memory_constraint: ${MEMORY_CONSTRAINT}
-  
+
   batch_size_info:
-    min_bsz: 16
-    max_bsz: 16
-    bsz_scale: 1
+    min_bsz: 64
+    max_bsz: 64
+    bsz_scale: 8
     settle_bsz: -1
     recommend_min_bsz: 0
 
@@ -58,4 +57,3 @@ search_engine:
     worker: 0
     log_dir: ${LOG_DIR}
     fine_grained_mode: 1
-    
