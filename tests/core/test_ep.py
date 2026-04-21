@@ -42,7 +42,7 @@ from galvatron.core.runtime.models.builder import build_model
 from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
 from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_mixtral
 from galvatron.utils.training_utils import distributed_dataloader, set_seed
-from tests.models.configs.get_config_json import ConfigFactory
+from tests.utils.model_utils import ModelFactory
 from tests.utils.init_dist import init_dist_env
 from tests.utils.runtime_args import make_test_args
 
@@ -107,27 +107,27 @@ def _run_test(test_args: Dict[str, Any]):
     device = torch.device("cuda", rank)
     set_seed(seed)
 
-    cfg = ConfigFactory.get_config_json("mixtral")
-    n_layer = cfg["n_layers"]
-    n_heads = cfg["n_heads"]
-    n_kv = cfg["n_kv_heads"]
+    cfg = ModelFactory.get_test_config("mixtral")
+    n_layer = cfg["num_layers"]
+    n_heads = cfg["num_attention_heads"]
+    n_kv = cfg["num_query_groups"]
     gqa = n_kv < n_heads
-    num_experts = max(cfg["num_local_experts"], ep_size)
+    num_experts = max(cfg["num_moe_experts"], ep_size)
     parallel_config = _ep_parallel_config(
         n_layer, ep_size, batch_size, chunks, dispatcher
     )
 
     hf_config = MixtralConfig(
-        hidden_size=cfg["dim"],
-        intermediate_size=cfg["hidden_dim"],
+        hidden_size=cfg["hidden_size"],
+        intermediate_size=cfg["ffn_hidden_size"],
         num_hidden_layers=n_layer,
         num_attention_heads=n_heads,
         num_key_value_heads=n_kv,
         num_local_experts=num_experts,
-        num_experts_per_tok=cfg["num_experts_per_tok"],
+        num_experts_per_tok=cfg["moe_router_topk"],
         vocab_size=cfg["vocab_size"],
-        max_position_embeddings=cfg["n_positions"],
-        rms_norm_eps=cfg["norm_eps"],
+        max_position_embeddings=cfg["seq_length"],
+        rms_norm_eps=cfg["norm_epsilon"],
         hidden_act="silu",
         attention_dropout=0.0,
     )
@@ -143,18 +143,18 @@ def _run_test(test_args: Dict[str, Any]):
         global_batch_size=batch_size,
         chunks=chunks,
         seed=seed,
-        seq_length=cfg["n_positions"],
-        hidden_size=cfg["dim"],
+        seq_length=cfg["seq_length"],
+        hidden_size=cfg["hidden_size"],
         num_layers=n_layer,
         num_attention_heads=n_heads,
-        ffn_hidden_size=cfg["hidden_dim"],
+        ffn_hidden_size=cfg["ffn_hidden_size"],
         vocab_size=cfg["vocab_size"],
         group_query_attention=gqa,
         num_query_groups=n_kv if gqa else None,
-        norm_epsilon=cfg["norm_eps"],
+        norm_epsilon=cfg["norm_epsilon"],
         num_moe_experts=num_experts,
-        moe_ffn_hidden_size=cfg["hidden_dim"],
-        moe_router_topk=cfg["num_experts_per_tok"],
+        moe_ffn_hidden_size=cfg["ffn_hidden_size"],
+        moe_router_topk=cfg["moe_router_topk"],
         moe_router_load_balancing_type="none",
         moe_router_score_function="softmax",
         moe_permute_fusion=False,

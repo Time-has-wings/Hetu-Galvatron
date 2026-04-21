@@ -1,23 +1,22 @@
-import torch
-from torch import nn
-import argparse
 import os
 import json
+import argparse
 
-def read_json_config(path):
-    return json.load(open(path,'r',encoding="utf-8"))
+import torch
+from torch import nn
 
-def write_json_config(config, path):
-    with open(path,'w') as fp:
-        json.dump(config,fp, indent=4)
+from galvatron.utils import read_json_config, write_json_config
 
 def profile(args):
     torch.distributed.init_process_group(backend="nccl")
-    local_rank = args.local_rank
+
     rank = torch.distributed.get_rank()
+    world_size = torch.distributed.get_world_size()
+
+    local_rank = int(os.environ['LOCAL_RANK'])
+
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
-    world_size = torch.distributed.get_world_size()
 
     model = nn.Linear(4096, 4096, bias=False).cuda()
     compute_tensor = torch.randn((1024,4096), device=device)
@@ -149,7 +148,7 @@ def profile(args):
         print('Profiling communication time when not overlapped with computation...')
     profile_op(comm_stream, lambda x: comm_func(x, 10), lambda x: comm_func(x, 30))
 
-    overlap_time_multiply = 4
+    overlap_time_multiply = args.overlap_time_multiply
     
     # computation overlaps communication
     if rank == 0:
@@ -188,7 +187,6 @@ def profile(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local-rank" ,type=int,default=-1)
     parser.add_argument("--overlap_time_multiply", type=int, default=4, help='The multiple of communication time and computation time when overlapped.')
     args = parser.parse_args()
     profile(args)

@@ -374,10 +374,10 @@ def model_name(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> str:
     m = _get_model_args(args)
     name = m.model_size or m.hf_model_name_or_path or "unknown"
     name = name.split("/")[-1]
-    # if hasattr(args, "profile"):
-    #     if getattr(args.profile, "profile_mode", "sequence") != "sequence":
-    #         seq = args.train.seq_length or 0
-    #         return f"{name}_seqlen{seq}"
+    if hasattr(args, "profile"):
+        if getattr(args.profile, "profile_mode", "sequence") != "sequence":
+            seq = args.train.seq_length or 0
+            # return f"{name}_seqlen{seq}"
     return str(name)
 
 

@@ -1,16 +1,21 @@
-from galvatron.core import HardwareProfiler, initialize_galvatron
 import os
+import sys
 
-if __name__ == '__main__':
-    args = initialize_galvatron(mode='profile_hardware')
-    print(args)
+from galvatron.core.arguments import load_with_hydra
+from galvatron.core.profiler import HardwareProfiler
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1].endswith((".yaml", ".yml")):
+        config_path, overrides = sys.argv[1], sys.argv[2:]
+        sys.argv = [sys.argv[0]]
+        args = load_with_hydra(config_path, overrides=overrides, mode="profiler_hardware")
+    else:
+        raise ValueError("Usage: python profile_hardware.py <config_path> [overrides...]")
+
     profiler = HardwareProfiler(args)
     path = os.path.dirname(os.path.abspath(__file__))
     profiler.set_path(path)
-    
-    # profile allreduce & p2p bandwidth
-    profiler.profile_bandwidth(backend=args.backend)
-    # profile allreduce & a2a bandwidth in different communication size
-    profiler.profile_sp_bandwidth(backend=args.backend)
-    # profile overlapping slowdown coefficient
+
+    profiler.profile_bandwidth()
+    profiler.profile_sp_bandwidth()
     profiler.profile_overlap()

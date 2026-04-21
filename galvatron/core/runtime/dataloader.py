@@ -439,8 +439,32 @@ def build_train_valid_test_data_iterators(
     return train_data_iterator, valid_data_iterator, test_data_iterator
 
 
+def _build_random_data_iterator():
+    """Build a cyclic iterator over FakeCausalLMDataset for profiling."""
+    args = get_args()
+    device = torch.device("cuda", args.local_rank)
+    dataset = FakeCausalLMDataset(args, device)
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=args.train.micro_batch_size,
+        collate_fn=random_collate_fn,
+        shuffle=False,
+    )
+    def _cyclic(loader):
+        while True:
+            for batch in loader:
+                yield batch
+    return _cyclic(dataloader)
+
+
 def get_train_valid_test_data_iterators():
-    """Build iterators using Megatron's blended dataset pipeline."""
+    """Build iterators using Megatron's blended dataset pipeline or random data."""
+    args = get_args()
+
+    if getattr(args.data, 'use_random_dataset', False):
+        print_rank_0('> using random synthetic dataset for profiling ...')
+        train_iter = _build_random_data_iterator()
+        return train_iter, None, None
 
     def _is_dataset_built_on_rank():
         return (
@@ -485,6 +509,10 @@ def get_train_valid_test_data_iterators():
 def get_batch(data_iterator):
     """Fetch a micro-batch and build the loss function closure."""
     args = get_args()
+
+    if getattr(args.data, 'use_random_dataset', False):
+        return next(data_iterator)
+
     batch_size = args.train.global_batch_size // parallel_state.get_vocab_dp_world_size()
 
     if (not parallel_state.is_pipeline_first_stage()) and (not parallel_state.is_pipeline_last_stage()):

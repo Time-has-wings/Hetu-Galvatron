@@ -18,11 +18,21 @@ def clip_grad_norm(model, max_norm, norm_type=2):
         for name, module in model.named_modules():
             # TODO: find a better way to keep the correctness
             if isinstance(module, FSDP) and hasattr(module, "scaling_groups"):
-                module._handle.flat_param.grad *= 1 / (torch.distributed.get_world_size(module.scaling_groups[0]) / torch.distributed.get_world_size(module.scaling_groups[1]))
+                if module._handle.flat_param.grad is not None:
+                    module._handle.flat_param.grad *= 1 / (
+                        torch.distributed.get_world_size(module.scaling_groups[0])
+                        / torch.distributed.get_world_size(module.scaling_groups[1])
+                    )
     
     for name, params in model.named_parameters():
+        if params.grad is None:
+            continue
         parameters.append(params)
         grads_for_norm.append(params.grad)
+
+    # Profiling / forward-only style runs may legitimately have no gradients.
+    if not grads_for_norm:
+        return 0.0
 
     total_norm = get_grad_norm_fp32(grads_for_norm, norm_type)
     clip_grad_by_total_norm_fp32(parameters, max_norm, total_norm)

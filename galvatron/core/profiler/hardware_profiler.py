@@ -1,39 +1,22 @@
 import os
-from typing import List, Tuple, Union
-
-import numpy as np
 
 from galvatron.utils.config_utils import read_json_config, write_json_config
 
+from .args_schema import ProfilerHardwareArgs
 from .base_profiler import BaseProfiler
 
 
 class HardwareProfiler(BaseProfiler):
-    """Hardware profiler for analyzing communication bandwidth and other hardware characteristics"""
+    """Hardware profiler for generating communication profiling scripts."""
 
-    def __init__(self, args):
-        """Initialize hardware profiler
-
-        Args:
-            args: Arguments containing profiling configuration including:
-            if backend == "nccl":
-                - num_nodes: Number of nodes
-                - num_gpus_per_node: Number of GPUs per node
-                - nccl_test_dir: Directory of nccl-test
-                - mpi_path: Path to MPI
-                - start_mb: Starting communication size in MB
-                - end_mb: Ending communication size in MB
-                - scale: Memory scale of nccl-test
-                - hostfile: Hostfile for nccl-test
-            else:
-                - num_nodes: Number of nodes
-                - num_gpus_per_node: Number of GPUs per node
-                - master_addr: Master node address
-                - master_port: Master node port
-                - node_rank: Current node rank
-        """
-        super().__init__(args)
+    def __init__(self, args: ProfilerHardwareArgs):
+        super().__init__()
+        self.args = args
         self.path = None
+
+    def set_path(self, path: str) -> None:
+        """Root directory for `scripts/` and generated logs (same layout as repo `profile_hardware/`)."""
+        self.path = path
 
     def get_env(self) -> str:
         """Get environment configuration as string
@@ -65,55 +48,53 @@ class HardwareProfiler(BaseProfiler):
 
         print("Generating allreduce test script...")
 
-        # Generate allreduce test script
-        def allreduce_script(allreduce_size: int, allreduce_consec: int) -> str:
-            return (
-                "python -m torch.distributed.launch "
-                f"--nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE "
-                "--master_addr=$MASTER_ADDR --master_port=$MASTER_PORT "
-                f"--node_rank=$NODE_RANK profile_allreduce.py "
-                f"--global_tp_deg {allreduce_size} --global_tp_consec {allreduce_consec} "
-                "--pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE \n"
-            )
+        torchrun_prefix = (
+            "torchrun \\\n"
+            "    --nnodes=$NUM_NODES \\\n"
+            "    --nproc_per_node=$NUM_GPUS_PER_NODE \\\n"
+            "    --master_addr=$MASTER_ADDR \\\n"
+            "    --master_port=$MASTER_PORT \\\n"
+            "    --node_rank=$NODE_RANK"
+        )
 
-        # Write allreduce test script
+        # One torchrun: bandwidth sweep logic (halving tp, consec 1 then 0, skip full-world consec=0)
+        # lives in profile_allreduce.bandwidth_jobs_from_tp_degrees — same as legacy shell nested loops.
+        log_name = "logs/allreduce/allreduce_bandwidth_tp_time0.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_allreduce.py \\\n"
+            f"    --global_tp_deg {_shell_int_list(_halving_tp_degrees(world_size, world_size))} \\\n"
+            "    --profile_time 0 \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
+
         config_dir = os.path.join(self.path, "./scripts")
         with open(os.path.join(config_dir, "profile_allreduce.sh"), "w") as f:
             f.write(env)
-            allreduce_size = num_nodes * num_gpus_per_node
-            while allreduce_size > 1:
-                for allreduce_consec in [1, 0]:
-                    if world_size == allreduce_size and allreduce_consec == 0:
-                        continue
-                    script = allreduce_script(allreduce_size, allreduce_consec)
-                    f.write(f'echo "Running: {script}"\n')
-                    f.write(script)
-                allreduce_size //= 2
-                f.write("sleep 1\n")
+            f.write(
+                "# Bandwidth sweep = legacy: while tp halves; each tp runs consec 1 then 0; "
+                "skip tp==world_size with consec 0. Implemented in profile_allreduce.bandwidth_jobs_from_tp_degrees.\n"
+                "# Omit --local_batch_size here: profile_allreduce.py defaults to 32 (still used for message size).\n"
+            )
+            f.write("mkdir -p logs/allreduce\n")
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
         print("Generating p2p test script...")
 
-        # Generate p2p test script
-        def p2p_script(pp_deg: int) -> str:
-            return (
-                "python -m torch.distributed.launch "
-                f"--nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE "
-                "--master_addr=$MASTER_ADDR --master_port=$MASTER_PORT "
-                f"--node_rank=$NODE_RANK profile_p2p.py "
-                f"--global_tp_deg 1 --global_tp_consec 1 --pp_deg {pp_deg} "
-                "--nproc_per_node=$NUM_GPUS_PER_NODE \n"
-            )
+        log_name = "logs/p2p/p2p_pp.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_p2p.py \\\n"
+            f"    --pp_deg {_shell_int_list(_p2p_pp_deg_sweep(world_size, self.args.max_pp_deg))} \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write p2p test script
         with open(os.path.join(config_dir, "profile_p2p.sh"), "w") as f:
             f.write(env)
-            pp_deg = 2
-            while pp_deg <= world_size and pp_deg <= self.args.max_pp_deg:
-                script = p2p_script(pp_deg)
-                f.write(f'echo "Running: {script}"\n')
-                f.write(script)
-                pp_deg *= 2
-                f.write("sleep 1\n")
+            f.write("mkdir -p logs/p2p\n")
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
     def generate_sp_script(self, num_nodes: int, num_gpus_per_node: int) -> None:
         """Generate test scripts for allreduce and all2all communication
@@ -126,193 +107,61 @@ class HardwareProfiler(BaseProfiler):
 
         print("Generating allreduce test script...")
 
-        def allreduce_script(allreduce_size: int, allreduce_consec: int, buffer_size: int) -> str:
-            return (
-                "python -m torch.distributed.launch "
-                "--nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE "
-                "--master_addr=$MASTER_ADDR --master_port=$MASTER_PORT "
-                "--node_rank=$NODE_RANK profile_allreduce.py "
-                f"--global_tp_deg {allreduce_size} --global_tp_consec {allreduce_consec} "
-                f"--pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE "
-                f"--local_batch_size {buffer_size} --profile_time 1\n"
-            )
+        torchrun_prefix = (
+            "torchrun \\\n"
+            "    --nnodes=$NUM_NODES \\\n"
+            "    --nproc_per_node=$NUM_GPUS_PER_NODE \\\n"
+            "    --master_addr=$MASTER_ADDR \\\n"
+            "    --master_port=$MASTER_PORT \\\n"
+            "    --node_rank=$NODE_RANK"
+        )
 
         args = self.args
         config_dir = os.path.join(self.path, "./scripts")
+        world_size = num_nodes * num_gpus_per_node
+        log_name = "logs/allreduce_sp/allreduce_sp_time1.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_allreduce.py \\\n"
+            f"    --global_tp_deg {_shell_int_list(_halving_tp_degrees(world_size, args.max_tp_size))} \\\n"
+            f"    --local_batch_size {_shell_int_list(_halving_batch_sizes(1024))} \\\n"
+            "    --profile_time 1 \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write allreduce test script with sequence parallelism
+        # Write allreduce test script with sequence parallelism (one torchrun)
         with open(os.path.join(config_dir, "profile_allreduce_sp.sh"), "w") as f:
             f.write(env)
-            allreduce_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
-            while allreduce_size > 1:
-                buffer_size = 1024
-                while buffer_size >= 1:
-                    script = allreduce_script(allreduce_size, 1, buffer_size)
-                    f.write(f'echo "Running: {script}"\n')
-                    f.write(script)
-                    f.write("sleep 1\n")
-                    buffer_size //= 2
-                allreduce_size //= 2
+            f.write("mkdir -p logs/allreduce_sp\n")
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
         print("Generating all2all test script...")
 
-        def all2all_script(allreduce_size: int, allreduce_consec: int, buffer_size: int) -> str:
-            return (
-                "python -m torch.distributed.launch "
-                "--nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE "
-                "--master_addr=$MASTER_ADDR --master_port=$MASTER_PORT "
-                "--node_rank=$NODE_RANK profile_all2all.py "
-                f"--global_tp_deg {allreduce_size} --global_tp_consec {allreduce_consec} "
-                f"--pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE "
-                f"--local_batch_size {buffer_size} --profile_time 1\n"
-            )
+        log_name = "logs/all2all_sp/all2all_sp.log"
+        script = (
+            f"{torchrun_prefix} \\\n"
+            "    profile_all2all.py \\\n"
+            f"    --global_tp_deg {_shell_int_list(_halving_tp_degrees(world_size, args.max_tp_size))} \\\n"
+            f"    --local_batch_size {_shell_int_list(_halving_batch_sizes(1024))} \\\n"
+            f"    2>&1 | tee {log_name}\n"
+        )
 
-        # Write all-to-all test script
         with open(os.path.join(config_dir, "profile_all2all_sp.sh"), "w") as f:
             f.write(env)
-            all2all_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
-            while all2all_size > 1:
-                buffer_size = 1024
-                while buffer_size >= 1:
-                    script = all2all_script(all2all_size, 1, buffer_size)
-                    f.write(f'echo "Running: {script}"\n')
-                    f.write(script)
-                    f.write("sleep 1\n")
-                    buffer_size //= 2
-                all2all_size //= 2
+            f.write("mkdir -p logs/all2all_sp\n")
+            f.write(f'echo "Running: {script}"\n')
+            f.write(script)
 
-    def profile_bandwidth(self, backend: str = "nccl") -> None:
-        """Profile communication bandwidth between devices
-
-        This method profiles both allreduce and point-to-point communication bandwidth.
-        Results are saved to hardware config files.
-
-        Args:
-            backend: Communication backend to use ("nccl" or "torch")
-
-        Note:
-            For NCCL backend, uses nccl-tests to measure bandwidth
-            For torch backend, generates test scripts for later execution
-        """
+    def profile_bandwidth(self) -> None:
+        """Generate allreduce/p2p profiling scripts."""
         args = self.args
-        world_size = args.num_nodes * args.num_gpus_per_node
-        if backend != "nccl":
-            self.generate_script(args.num_nodes, args.num_gpus_per_node)
-            # import os
-            # os.system('sh scripts/allreduce_scrpit.sh')
-            # os.system('sh scripts/p2p_scrpit.sh')
-            return
+        self.generate_script(args.num_nodes, args.num_gpus_per_node)
 
-        # Create hardware config directory
-        hardware_config_dir = os.path.join(self.path, "./hardware_configs")
-        os.makedirs(hardware_config_dir, exist_ok=True)
-
-        # Profile allreduce bandwidth
-        nccl_file = "build/all_reduce_perf"
-        ARGS = self.prepare_nccltest_args(nccl_file)
-        hardware_config_file = "allreduce_bandwidth_%dnodes_%dgpus_per_node.json" % (
-            args.num_nodes,
-            args.num_gpus_per_node,
-        )
-        hardware_config_path = os.path.join(hardware_config_dir, hardware_config_file)
-        allreduce_size = world_size
-        while allreduce_size > 1:
-            for is_consecutive in [True, False]:
-                if world_size == allreduce_size and not is_consecutive:
-                    continue
-                print(
-                    "============= allreduce_size: %d, allreduce_consec: %d ============="
-                    % (allreduce_size, is_consecutive)
-                )
-                allreduce_groups = self.generate_allreduce_groups(world_size, allreduce_size, is_consecutive)
-                bandwidth = self.launch_nccl_test(allreduce_groups, args.num_gpus_per_node, ARGS)
-                key = "allreduce_size_%d_consec_%d" % (allreduce_size, is_consecutive)
-                self.write_config(hardware_config_path, key, bandwidth)
-                print("=" * 70, "\n")
-            allreduce_size //= 2
-
-        # Profile p2p bandwidth
-        nccl_file = "build/sendrecv_perf"
-        ARGS = self.prepare_nccltest_args(nccl_file)
-        hardware_config_file = "p2p_bandwidth_%dnodes_%dgpus_per_node.json" % (args.num_nodes, args.num_gpus_per_node)
-        hardware_config_path = os.path.join(hardware_config_dir, hardware_config_file)
-        pp_deg = 2
-        while pp_deg <= world_size and pp_deg <= args.max_pp_deg:
-            print("============= pp_size: %d =============" % (pp_deg))
-            p2p_groups = self.generate_p2p_groups(world_size, pp_deg)
-            bandwidth = self.launch_nccl_test(p2p_groups, args.num_gpus_per_node, ARGS)
-            key = "pp_size_%d" % pp_deg
-            self.write_config(hardware_config_path, key, bandwidth)
-            print("=" * 70, "\n")
-            pp_deg *= 2
-
-        os.system("rm -rf %s" % (os.path.join(self.path, "nccl_test.log")))
-
-    def profile_sp_bandwidth(self, backend="nccl"):
-        """Profile bandwidth for sequence parallelism
-
-        This method profiles both allreduce and all-to-all communication bandwidth
-        with different buffer sizes for sequence parallelism.
-
-        Args:
-            backend: Communication backend to use ("nccl" or "torch")
-
-        Note:
-            For NCCL backend, uses nccl-tests to measure bandwidth
-            For torch backend, generates test scripts for later execution
-        """
+    def profile_sp_bandwidth(self):
+        """Generate sequence-parallel profiling scripts."""
         args = self.args
-        world_size = args.num_nodes * args.num_gpus_per_node
-        if backend != "nccl":
-            self.generate_sp_script(args.num_nodes, args.num_gpus_per_node)
-            # import os
-            # os.system('sh scripts/allreduce_scrpit.sh')
-            # os.system('sh scripts/p2p_scrpit.sh')
-            return
-
-        # Create hardware config directory
-        hardware_config_dir = os.path.join(self.path, "./hardware_configs")
-        if not os.path.exists(hardware_config_dir):
-            os.mkdir(hardware_config_dir)
-
-        # Profile allreduce bandwidth
-        nccl_file = "build/all_reduce_perf"
-        ARGS = self.prepare_nccltest_args(nccl_file)
-        hardware_config_file = "sp_time_%dnodes_%dgpus_per_node.json" % (args.num_nodes, args.num_gpus_per_node)
-        hardware_config_path = os.path.join(hardware_config_dir, hardware_config_file)
-        allreduce_size = world_size
-        while allreduce_size > 1:
-            allreduce_consec = 1
-            print(
-                "============= allreduce_size: %d, allreduce_consec: %d ============="
-                % (allreduce_size, allreduce_consec)
-            )
-            allreduce_groups = self.generate_allreduce_groups(world_size, allreduce_size, allreduce_consec)
-            sizes, times = self.launch_nccl_test(allreduce_groups, args.num_gpus_per_node, ARGS, mode="detail")
-            for size, time in zip(sizes, times):
-                key = "allreduce_size_%d_%dMB_time" % (allreduce_size, size)
-                self.write_config(hardware_config_path, key, time)
-            print("=" * 70, "\n")
-            allreduce_size //= 2
-
-        # Profile all-to-all bandwidth
-        nccl_file = "build/alltoall_perf"
-        ARGS = self.prepare_nccltest_args(nccl_file)
-        hardware_config_file = "sp_time_%dnodes_%dgpus_per_node.json" % (args.num_nodes, args.num_gpus_per_node)
-        hardware_config_path = os.path.join(hardware_config_dir, hardware_config_file)
-        all2all_size = world_size
-        while all2all_size > 1:
-            all2all_consec = 1
-            print("============= all2all_size: %d, all2all_consec: %d =============" % (all2all_size, all2all_consec))
-            allreduce_groups = self.generate_allreduce_groups(world_size, all2all_size, all2all_consec)
-            sizes, times = self.launch_nccl_test(allreduce_groups, args.num_gpus_per_node, ARGS, mode="detail")
-            for size, time in zip(sizes, times):
-                key = "all2all_size_%d_%dMB_time" % (all2all_size, size)
-                self.write_config(hardware_config_path, key, time)
-            print("=" * 70, "\n")
-            all2all_size //= 2
-
-        os.system("rm -rf %s" % (os.path.join(self.path, "nccl_log")))
+        self.generate_sp_script(args.num_nodes, args.num_gpus_per_node)
 
     def write_config(self, hardware_config_path: str, key: str, bandwidth: float) -> None:
         """Write bandwidth/time results to hardware config file
@@ -327,165 +176,6 @@ class HardwareProfiler(BaseProfiler):
         write_json_config(config, hardware_config_path)
         print("Already written bandwidth/time %s into hardware config file %s!" % (key, hardware_config_path))
 
-    def read_hostfile(self) -> List[str]:
-        """Read hostnames from hostfile
-
-        Returns:
-            List[str]: List of hostnames from the hostfile
-        """
-        args = self.args
-        hostfile = os.path.join(self.path, args.hostfile)
-        with open(hostfile, "r") as f:
-            hostnames = f.readlines()
-        hostnames = [hostname.strip() for hostname in hostnames if hostname.strip() != ""]
-
-        return hostnames
-
-    def prepare_nccltest_args(self, nccl_file="build/all_reduce_perf") -> str:
-        """Prepare arguments for NCCL tests
-
-        Args:
-            nccl_file: Path to NCCL test executable relative to nccl_test_dir
-
-        Returns:
-            str: Command line arguments for NCCL test
-
-        Note:
-            Will build NCCL test if not already built
-        """
-        args = self.args
-        nccl_file = os.path.join(self.path, args.nccl_test_dir, nccl_file)
-        if not os.path.exists(nccl_file):
-            print("Nccl test file %s does not exist!" % nccl_file)
-            print("Building nccl-test...")
-            if args.num_nodes == 1:
-                os.system(
-                    "USE_EXPORT_VARIABLE=1 MAKE_MPI=0 sh %s" % (os.path.join(self.path, "scripts/build_nccl_test.sh"))
-                )
-            else:
-                os.system(
-                    "USE_EXPORT_VARIABLE=1 MAKE_MPI=1 MPI_PATH=%s sh %s"
-                    % (args.mpi_path, os.path.join(self.path, "scripts/build_nccl_test.sh"))
-                )
-            print("Nccl-test built succesfully!")
-        ARGS = ""
-        ARGS += "USE_EXPORT_VARIABLE=1 "
-        ARGS += "START_MB=%d " % args.start_mb
-        ARGS += "END_MB=%d " % args.end_mb
-        ARGS += "SCALE=%d " % args.scale
-        ARGS += "NCCLTEST_FILE=%s " % nccl_file
-        ARGS += "OUTPUT_TO_LOG=1 "
-        return ARGS
-
-    def generate_allreduce_groups(
-        self, world_size: int, allreduce_size: int, allreduce_consec: bool
-    ) -> List[List[int]]:
-        """Generate groups for allreduce communication
-
-        Args:
-            world_size: Total number of processes
-            allreduce_size: Size of each allreduce group
-            allreduce_consec: Whether to use consecutive GPU mapping
-
-        Returns:
-            List[List[int]]: List of process groups for allreduce
-        """
-        allreduce_size = int(allreduce_size)
-        num_allreduce_groups = int(world_size // allreduce_size)
-        allreduce_groups = []
-        for i in range(num_allreduce_groups):
-            if allreduce_consec:
-                ranks = list(range(i * allreduce_size, (i + 1) * allreduce_size))
-            else:
-                ranks = list(range(i, world_size, num_allreduce_groups))
-            allreduce_groups.append(ranks)
-        return allreduce_groups
-
-    def generate_p2p_groups(self, world_size: int, pp_size: int) -> List[List[int]]:
-        """Generate groups for point-to-point communication
-
-        Args:
-            world_size: Total number of processes
-            pp_size: Size of each pipeline parallel group
-
-        Returns:
-            List[List[int]]: List of process groups for p2p communication
-        """
-        pp_size = int(pp_size)
-        num_pp_groups = int(world_size // pp_size)
-        pp_groups = []
-        for i in range(num_pp_groups):
-            ranks = list(range(i, world_size, num_pp_groups))
-            pp_groups.append(ranks)
-        return pp_groups
-
-    def launch_nccl_test(
-        self, groups: List[List[int]], num_gpus_per_node: int, ARGS: str, mode: str = "avg"
-    ) -> Union[float, Tuple[List[int], List[float]]]:
-        """Launch NCCL test for given process groups
-
-        Args:
-            groups: List of process groups to test
-            num_gpus_per_node: Number of GPUs per node
-            ARGS: Command line arguments for NCCL test
-            mode: Test mode, either 'avg' for average bandwidth or 'detail' for detailed results
-
-        Returns:
-            Union[float, Tuple[List[int], List[float]]]:
-                If mode=='avg': Average bandwidth in MB/s
-                If mode=='detail': Tuple of (message sizes in MB, communication times in milliseconds)
-        """
-        hostnames = self.read_hostfile()
-        bandwidths = []
-        for group in groups:
-            print("device group:", group)
-            host_ids = sorted(list(set([rank // num_gpus_per_node for rank in group])))
-            group_num_nodes = len(host_ids)
-            group_num_gpus_per_node = len(group) // group_num_nodes
-            cuda_visible_devices = sorted(list(set([rank % num_gpus_per_node for rank in group])))
-            print(
-                "num_nodes: %d, host_ids:" % group_num_nodes,
-                host_ids,
-                " num_gpus_per_node: %d, cuda_visible_devices:" % group_num_gpus_per_node,
-                cuda_visible_devices,
-            )
-            hostname = ",".join([hostnames[i] for i in host_ids])
-            DEVICE_ARGS = ""
-            DEVICE_ARGS += "HOSTNAMES=%s " % hostname
-            DEVICE_ARGS += "NUM_NODES=%d " % group_num_nodes
-            DEVICE_ARGS += "NUM_GPUS_PER_NODE=%d " % group_num_gpus_per_node
-            DEVICE_ARGS += 'DEVICES="CUDA_VISIBLE_DEVICES=%s" ' % (",".join([str(i) for i in cuda_visible_devices]))
-            if mode == "detail":
-                ARGS += "START_MB=1 "
-                ARGS += "END_MB=1024 "
-            print(DEVICE_ARGS + ARGS)
-            os.system(DEVICE_ARGS + ARGS + "sh %s" % (os.path.join(self.path, "scripts/run_nccl_test.sh")))
-            with open("nccl_log/1/rank.0/stdout", "r") as f:
-                lines = f.readlines()
-            if mode == "avg":
-                for line in lines[::-1]:
-                    if "Avg bus bandwidth" in line:
-                        result = line
-                        bandwidth = float(line.split()[-1])
-                        break
-                print(result)
-                bandwidths.append(bandwidth)
-                if self.args.avg_or_min_or_first == "first":
-                    break
-            else:
-                sizes = []
-                times = []
-                for line in lines:
-                    datas = line.split()
-                    if len(datas) > 10 and datas[0].isdigit():
-                        sizes.append(int(datas[0]) // 1024 // 1024)
-                        times.append(float(datas[5]) / 1000)
-                return sizes, times
-        bandwidth = np.min(bandwidths) if self.args.avg_or_min_or_first == "min" else np.mean(bandwidths)
-        print("Bandwidths:", bandwidths, "Average bandwidth:", bandwidth)
-        print()
-        return bandwidth
-
     # =============== For Launching Scripts for Profiling Overlap Slowdown Coefficient ===============
     def profile_overlap(self):
         """Profile overlap slowdown coefficient
@@ -498,3 +188,42 @@ class HardwareProfiler(BaseProfiler):
         ARGS += "NUM_GPUS_PER_NODE=%d " % args.num_gpus_per_node
         ARGS += "OVERLAP_TIME_MULTIPLY=%d " % args.overlap_time_multiply
         os.system(ARGS + "sh %s" % (os.path.join(self.path, "scripts/profile_overlap.sh")))
+
+
+
+
+
+def _halving_tp_degrees(world_size: int, max_tp: int) -> list[int]:
+    """8,4,2,... down from min(world_size, max_tp), same order as legacy shell loops."""
+    out = []
+    s = min(world_size, max_tp)
+    while s > 1:
+        out.append(s)
+        s //= 2
+    return out
+
+
+def _halving_batch_sizes(start: int = 1024) -> list[int]:
+    """1024, 512, ... 1."""
+    out = []
+    b = start
+    while b >= 1:
+        out.append(b)
+        b //= 2
+    return out
+
+
+def _p2p_pp_deg_sweep(world_size: int, max_pp_deg: int) -> list[int]:
+    """2, 4, 8, ... up to world_size and max_pp_deg (same as legacy profile_p2p.sh loop)."""
+    out = []
+    pp_deg = 2
+    while pp_deg <= world_size and pp_deg <= max_pp_deg:
+        out.append(pp_deg)
+        pp_deg *= 2
+    return out
+
+
+def _shell_int_list(xs: list[int]) -> str:
+    """Space-separated ints for ``nargs='+'`` flags in generated shell, e.g. ``8 4 2``."""
+    return " ".join(str(x) for x in xs)
+

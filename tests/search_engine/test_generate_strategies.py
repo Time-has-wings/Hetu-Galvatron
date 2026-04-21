@@ -2,13 +2,12 @@ import pytest
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
 from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 from galvatron.utils.strategy_utils import print_strategy_list
-from tests.utils.model_utils_new import ModelFactory
+from tests.utils.model_utils import ModelFactory
 
 @pytest.mark.search_engine
 @pytest.mark.parametrize("model_type", ["llama_search"])
-@pytest.mark.parametrize("backend", ["hf"])
 @pytest.mark.parametrize("disables", [['cp']])
-def test_generate_strategies(model_type, backend, tmp_path, disables, capsys):
+def test_generate_strategies(model_type, tmp_path, disables, capsys):
 
     args = GalvatronSearchArgs()
 
@@ -16,7 +15,7 @@ def test_generate_strategies(model_type, backend, tmp_path, disables, capsys):
         setattr(args.search_space_info, f"disable_{disable}", 1)
     args.parallelism_info.default_dp_type = 'zero2'
 
-    ModelFactory.resolve_model_config(args, model_type, backend)
+    ModelFactory.resolve_model_config(args, model_type)
     model_layer_configs_func = ModelFactory.get_model_layer_configs_func()
     model_name_func = ModelFactory.get_model_name_func()
     

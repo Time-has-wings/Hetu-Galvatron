@@ -15,7 +15,7 @@ def mock_distributed():
 @pytest.fixture
 def base_profiler(profiler_model_configs_dir):
     """Create base profiler instance"""
-    profiler = initialize_runtime_profile_profiler(profiler_model_configs_dir, "llama_search", "hf")
+    profiler = initialize_runtime_profile_profiler(profiler_model_configs_dir, "llama_search")
     return profiler
 
 @pytest.mark.profiler
@@ -55,7 +55,7 @@ def test_profile_memory_stages(base_profiler, stage, expected_keys):
 ])
 def test_post_profile_memory(base_profiler, pipeline_type, expected_keys):
     """Test post memory profiling with different pipeline types"""
-    base_profiler.args.pipeline_type = pipeline_type
+    base_profiler.args.parallel.pipeline_type = pipeline_type
     base_profiler.mem_dict = {
         'iter_4_before_forward': 300,
         'iter_4_after_forward': 900,
@@ -82,14 +82,14 @@ def test_post_profile_memory(base_profiler, pipeline_type, expected_keys):
 @pytest.mark.profiler
 def test_post_profile_memory_with_save(base_profiler):
     """Test post memory profiling with save"""
-    base_profiler.args.save_profiled_memory = True
-    base_profiler.args.pipeline_type = "gpipe"
-    base_profiler.args.pp_deg = 2
-    base_profiler.args.global_tp_deg = 2
-    base_profiler.args.global_train_batch_size = 16
-    base_profiler.args.global_checkpoint = 0
-    base_profiler.args.sequence_parallel = True
-    base_profiler.args.vocab_tp = 1
+    base_profiler.args.profile.save_profiled_memory = True
+    base_profiler.args.parallel.pipeline_type = "gpipe"
+    base_profiler.args.parallel.pp_deg = 2
+    base_profiler.args.parallel.global_tp_deg = 2
+    base_profiler.args.train.global_batch_size = 16
+    base_profiler.args.parallel.global_checkpoint = 0
+    base_profiler.args.train.sequence_parallel = True
+    base_profiler.args.parallel.vocab_tp = 1
     base_profiler.mem_dict = {
         'iter_4_before_forward': 300,
         'iter_4_after_forward': 900,
@@ -144,7 +144,7 @@ def test_profile_time_start_normal(base_profiler):
         
         base_profiler.time_list = [0.1, 0.2, 0.3]
         base_profiler.profile_time_start(iter=3)
-        mock_print.assert_called_with("Average iteration time is: 0.2000 s")
+        mock_print.assert_called_with("Average iteration time is: 0.2500 s")
 
 def test_profile_time_start_with_save(base_profiler):
     """Test time profiling start with saving"""
@@ -153,8 +153,8 @@ def test_profile_time_start_with_save(base_profiler):
     base_profiler.start_iter = 0
     base_profiler.end_iter = 3
     base_profiler.time_list = [0.1, 0.2, 0.3]
-    base_profiler.args.global_train_batch_size = 16
-    base_profiler.args.profile_forward = True
+    base_profiler.args.train.global_batch_size = 16
+    base_profiler.args.profile.profile_forward = True
     
     with patch('torch.cuda.synchronize') as mock_sync, \
          patch('builtins.exit') as mock_exit:
@@ -164,7 +164,7 @@ def test_profile_time_start_with_save(base_profiler):
     with open(base_profiler.time_profiling_path(), "r") as f:
         data = json.load(f)
         for key,value in data.items():
-            assert abs(value - 200) < 1e-6
+            assert abs(value - 250) < 1e-6
 
 def test_profile_time_end_with_loss(base_profiler):
     """Test time profiling end with loss output"""
@@ -172,8 +172,8 @@ def test_profile_time_end_with_loss(base_profiler):
     mock_loss.item.return_value = 0.5
     base_profiler.rank = 3  # last rank
     base_profiler.world_size = 4
-    base_profiler.args.lr = 0.001
-    base_profiler.args.global_train_batch_size = 32
+    base_profiler.args.train.lr = 0.001
+    base_profiler.args.train.global_batch_size = 32
     base_profiler.start_iter = 0
     base_profiler.end_iter = 3
     MockCUDAEvent._current_index = 0
@@ -206,9 +206,9 @@ def test_profile_time_python(base_profiler):
     """Test Python time profiling"""
     base_profiler.start_iter = 0
     base_profiler.end_iter = 3
-    base_profiler.args.profile_forward = True
-    base_profiler.args.global_train_batch_size = 32
-    with patch('time.time', side_effect=[100.0, 101.0]):
+    base_profiler.args.profile.profile_forward = True
+    base_profiler.args.train.global_batch_size = 32
+    with patch('time.time', side_effect=[100.0, 101.0, 102.0]):
         # Start timing
         base_profiler.profile_time_python(iter=0)
         assert base_profiler.total_start_time == 100.0

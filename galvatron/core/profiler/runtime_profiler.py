@@ -1,22 +1,25 @@
 import time
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 
 from .base_profiler import BaseProfiler
 from .utils import print_peak_memory, save_profiled_memory, save_profiled_time
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
 
 
 class RuntimeProfiler(BaseProfiler):
     """Runtime profiler for monitoring memory usage and computation time during model execution."""
 
-    def __init__(self, args: Any):
+    def __init__(self, args: GalvatronRuntimeArgs):
         """Initialize runtime profiler
 
         Args:
             args: Arguments containing profiling configuration
         """
-        super().__init__(args)
+        super().__init__()
+        self.args = args
 
     def set_profiler_dist(
         self,
@@ -42,18 +45,21 @@ class RuntimeProfiler(BaseProfiler):
             end_iter: Ending iteration for profiling
             rank: Current process rank (default: get from torch.distributed)
         """
+        args = self.args
         rank = torch.distributed.get_rank() if rank is None else rank
         if profile_ranks is None:
             world_size = torch.distributed.get_world_size()
             profile_ranks = [0, world_size - 1]
 
-        self.set_path(path)
+        self.set_work_dir(path)
         self.set_model_name(model_name)
-        self.set_model_layer_configs(model_layer_configs)
-        self.set_memory_profiler(rank, profile_ranks)
+        self.set_profile_unit(args.profile.profile_unit)
+        self.set_mixed_precision(args.parallel.mixed_precision)
 
-        exit_ = bool(self.args.profile.exit_after_profiling)
-        self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
+        self.set_model_layer_configs(model_layer_configs)
+
+        self.set_memory_profiler(rank, profile_ranks)
+        self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=bool(args.profile.exit_after_profiling))
 
     def set_profiler_single(self, start_iter=10, end_iter=20):
         """
@@ -283,7 +289,8 @@ class RuntimeProfiler(BaseProfiler):
 
     def _process_time_results(self) -> None:
         """Process and save time profiling results"""
-        avg_time = sum(self.time_list) / len(self.time_list)
+        valid_samples = self._filtered_time_samples()
+        avg_time = sum(valid_samples) / len(valid_samples)
         print(f"Average iteration time is: {avg_time:.4f} s")
 
         args = self.args
@@ -301,6 +308,27 @@ class RuntimeProfiler(BaseProfiler):
             self.start_iter, self.end_iter = self.end_iter, (self.end_iter - self.start_iter + self.end_iter)
             torch.cuda.synchronize()
             self.start.record()
+
+    def _filtered_time_samples(self) -> List[float]:
+        """Apply iter0 warmup removal and 3-sigma filtering."""
+        if len(self.time_list) == 0:
+            raise RuntimeError("No timing samples are available for processing.")
+
+        samples = list(self.time_list)
+        if self.start_iter == 0 and len(samples) > 1:
+            samples = samples[1:]
+
+        if len(samples) <= 2:
+            return samples
+
+        mean = float(np.mean(samples))
+        std = float(np.std(samples))
+        if std == 0:
+            return samples
+
+        lower, upper = mean - 3 * std, mean + 3 * std
+        filtered = [x for x in samples if lower <= x <= upper]
+        return filtered if len(filtered) > 0 else samples
 
     def _log_iteration_stats(
         self,
