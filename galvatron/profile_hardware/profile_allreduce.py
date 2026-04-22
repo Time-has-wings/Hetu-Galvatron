@@ -3,9 +3,6 @@ import torch.distributed as dist
 import os
 import argparse
 
-import galvatron
-from galvatron.core.runtime.pipeline import PipelineParallel, PipeSequential
-from galvatron.core.runtime.comm_groups import gen_comm_groups
 from galvatron.utils import read_json_config, write_json_config
 from galvatron.utils.training_utils import gen_profiling_groups
 
