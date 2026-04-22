@@ -1,0 +1,19 @@
+# sequence mode for 4k/6k/8k search (3 points for quadratic fit)
+model_profiler:
+  profile_type: computation
+  profile_mode: sequence
+  profile_unit: all
+  profile_flow_control: all
+  profile_mixed_precision: bf16
+  profile_fixed_batch_size: 1
+  profile_min_seq_length: 4096
+  profile_max_seq_length: 8192
+  profile_seq_length_step: 2048
+  profile_layernum_min: 2
+  profile_layernum_max: 4
+  runtime_yaml_template_path: scripts/profile_runtime.yaml
+
+  model_info:
+    model_config_path: ../model_configs/llama2-7b.yaml
+    model_size: llama2-7b
+    is_moe_model: false

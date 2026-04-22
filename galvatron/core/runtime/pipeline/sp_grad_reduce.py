@@ -13,8 +13,8 @@ from torch.distributed.fsdp._common_utils import (
     _no_dispatch_record_stream,
     clean_tensor_name,
 )
-
-if torch.__version__ >= "2.5.0":
+from galvatron.core.runtime.utils.utils import is_torch_min_version
+if is_torch_min_version("2.5.0"):
     from torch.distributed.fsdp._flat_param import (
         RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
         FlatParameter,
@@ -31,7 +31,7 @@ else:
         RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
     )
 
-from megatron.core import parallel_state
+from galvatron.core.runtime import parallel_state
 from torch.distributed.fsdp._runtime_utils import (
     _low_precision_hook_enabled,
     _post_backward_reshard,

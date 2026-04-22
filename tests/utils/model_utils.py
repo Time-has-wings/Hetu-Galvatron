@@ -1,137 +1,105 @@
-from dataclasses import dataclass
-from typing import Callable, Type, NamedTuple, Optional
+import os
+from typing import Callable, List, Dict, Any, Optional, Union
+from galvatron.core.runtime.args_schema import GalvatronRuntimeArgs
+from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 
-class ModelComponents(NamedTuple):
-    ModelClass: Type
-    get_model_config: Callable
-    get_model: Callable
-    convert_checkpoints: Optional[Callable]
-    DatasetClass: Type
-    collate_fn: Callable
 
 class ModelFactory:
-    @staticmethod
-    def get_components(model_type: str, backend: str) -> ModelComponents:
-        """Get model components based on model type and backend.
-        
-        Args:
-            model_type: "gpt", "llama", or "llama2"
-            backend: "hf" or "fa"
-            
-        Returns:
-            ModelComponents containing all necessary model components
-        """
-        if model_type.startswith("gpt") and backend == "hf":
-            from galvatron.models.gpt_hf.GPTModel_hybrid_parallel import (
-                get_gpt_config as get_model_config,
-                gpt_model_hp as get_model,
-            )
-            from transformers import GPT2LMHeadModel as ModelClass
-            from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_gpt as convert_checkpoints
-            from galvatron.models.gpt_hf.dataloader import (
-                DataLoaderForGPT as DatasetClass,
-                random_collate_fn as collate_fn
-            )
-        
-        elif model_type.startswith("llama") and backend == "hf":
-            from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import(
-                get_llama_config as get_model_config,
-                llama_model_hp as get_model,
-            )
-            from transformers import LlamaForCausalLM as ModelClass
-            from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_llama as convert_checkpoints
-            from galvatron.models.llama_hf.dataloader import (
-                DataLoaderForLlama as DatasetClass,
-                random_collate_fn as collate_fn
-            )
+    """Unified model config factory for all Galvatron tests.
 
-        elif model_type.startswith("gpt") and backend == "fa":
-            from galvatron.models.gpt_fa.GPTModel_hybrid_parallel import (
-                get_gpt_config as get_model_config,
-                gpt_model_hp as get_model,
-            )
-            from flash_attn.models.gpt import GPTLMHeadModel as ModelClass
-            from galvatron.models.gpt_fa.dataloader import (
-                DataLoaderForGPT as DatasetClass,
-                random_collate_fn as collate_fn
-            )
-            convert_checkpoints = None
-            
-        elif model_type.startswith("llama") and backend == "fa":
-            from galvatron.models.llama_fa.LlamaModel_hybrid_parallel import (
-                get_llama_config as get_model_config,
-                llama_model_hp as get_model,
-            )
-            from flash_attn.models.gpt import GPTLMHeadModel as ModelClass
-            from galvatron.models.llama_fa.dataloader import (
-                DataLoaderForLlama as DatasetClass,
-                random_collate_fn as collate_fn
-            )
-            convert_checkpoints = None
-            
+    All model configs live as YAML files under ``tests/utils/model_configs/``.
+    Production-size configs (e.g. llama2-7b.yaml) are used by search/profiler tests.
+    Small test configs (e.g. gpt-test.yaml) are used by core/models correctness tests.
+    """
+
+    # Production-size YAML mapping (for search/profiler tests)
+    _YAML_MAP = {
+        "gpt": "gpt2-small.yaml",
+        "llama": "llama2-7b.yaml",
+        "mixtral": "mistral-7b.yaml",
+    }
+
+    # Small test YAML mapping (for core/models correctness tests)
+    _TEST_YAML_MAP = {
+        "gpt": "gpt-test.yaml",
+        "gpt256": "gpt-test-256.yaml",
+        "llama": "llama-test.yaml",
+        "llama2": "llama2-test.yaml",
+        "mixtral": "mixtral-test.yaml",
+    }
+
+    @staticmethod
+    def _get_yaml_dir() -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs")
+
+    @staticmethod
+    def _resolve_yaml_path(model_type: str) -> str:
+        """Resolve production YAML config path based on model_type prefix."""
+        yaml_dir = ModelFactory._get_yaml_dir()
+        for prefix, yaml_file in ModelFactory._YAML_MAP.items():
+            if model_type.startswith(prefix):
+                return os.path.join(yaml_dir, yaml_file)
+        raise ValueError(f"Unsupported model type: {model_type}")
+
+    @staticmethod
+    def resolve_model_config(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs], model_type: str):
+        """Resolve model config from production YAML based on model_type."""
+        model_yaml_path = ModelFactory._resolve_yaml_path(model_type)
+
+        if isinstance(args, GalvatronSearchArgs):
+            args.model_info.model_config_path = model_yaml_path
+        elif isinstance(args, GalvatronRuntimeArgs):
+            args.model.model_config_path = model_yaml_path
         else:
-            raise ValueError(f"Unsupported model type: {model_type} with backend: {backend}")
+            raise ValueError(f"Unsupported args type: {type(args)}")
 
-        return ModelComponents(
-            ModelClass=ModelClass,
-            get_model_config=get_model_config,
-            get_model=get_model,
-            convert_checkpoints=convert_checkpoints,
-            DatasetClass=DatasetClass,
-            collate_fn=collate_fn
-        )
+        from galvatron.utils.hf_config_adapter import resolve_model_config
+        resolve_model_config(args)
 
     @staticmethod
-    def get_meta_configs(model_type: str, backend: str):
-        if model_type.startswith("gpt") and backend == "hf":
-            from galvatron.models.gpt_hf.meta_configs import model_layer_configs, model_name
-        elif model_type.startswith("llama") and backend == "hf":
-            from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
-        elif model_type.startswith("gpt") and backend == "fa":
-            from galvatron.models.gpt_fa.meta_configs import model_layer_configs, model_name
-        elif model_type.startswith("llama") and backend == "fa":
-            from galvatron.models.llama_fa.meta_configs import model_layer_configs, model_name
-        return model_layer_configs, model_name
+    def get_test_config(model_type: str) -> Dict[str, Any]:
+        """Load small test model config from YAML, returning a flat dict.
 
-    @staticmethod
-    def get_layernum_arg_names(model_type: str, backend: str):
-        if model_type.startswith("gpt") and backend == "hf":
-            from galvatron.models.gpt_hf.arguments import layernum_arg_names
-        elif model_type.startswith("llama") and backend == "hf":
-            from galvatron.models.llama_hf.arguments import layernum_arg_names
-        elif model_type.startswith("gpt") and backend == "fa":
-            from galvatron.models.gpt_fa.arguments import layernum_arg_names
-        elif model_type.startswith("llama") and backend == "fa":
-            from galvatron.models.llama_fa.arguments import layernum_arg_names
-        return layernum_arg_names
-    
-    @staticmethod
-    def create_model(model_type: str, backend: str, config, args):
-        """Factory method to create a model instance.
-        
-        Args:
-            model_type: Type of model
-            backend: Backend framework
-            config: Model configuration
-            args: Training arguments
-            
-        Returns:
-            Instantiated model
+        Keys use Galvatron-standard
+        names: hidden_size, num_layers, num_attention_heads, ffn_hidden_size,
+        vocab_size, seq_length, norm_epsilon, etc.
         """
-        components = ModelFactory.get_components(model_type, backend)
-        return components.get_model(config, args)
+        import yaml
+
+        if model_type not in ModelFactory._TEST_YAML_MAP:
+            raise ValueError(f"Unsupported test model type: {model_type}. "
+                             f"Available: {list(ModelFactory._TEST_YAML_MAP.keys())}")
+
+        yaml_path = os.path.join(ModelFactory._get_yaml_dir(), ModelFactory._TEST_YAML_MAP[model_type])
+        with open(yaml_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        # Ensure seq_length has a default (32 for small tests)
+        if "seq_length" not in data:
+            data["seq_length"] = 32
+
+        return data
 
     @staticmethod
-    def create_config(model_type: str, backend: str, args, overwrite_args=True):
-        """Factory method to create model configuration.
-        
-        Args:
-            model_type: Type of model
-            backend: Backend framework
-            args: Training arguments
-            
-        Returns:
-            Model configuration
-        """
-        components = ModelFactory.get_components(model_type, backend)
-        return components.get_model_config(args, overwrite_args)
+    def get_model_layer_configs(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> List[Dict[str, Any]]:
+        """Get model layer configs from resolved args."""
+        from galvatron.utils.hf_config_adapter import model_layer_configs
+        return model_layer_configs(args)
+
+    @staticmethod
+    def get_model_name(args: Union[GalvatronRuntimeArgs, GalvatronSearchArgs]) -> str:
+        """Get model name from resolved args."""
+        from galvatron.utils.hf_config_adapter import model_name
+        return model_name(args)
+
+    @staticmethod
+    def get_model_layer_configs_func() -> Callable:
+        """Return the model_layer_configs function reference."""
+        from galvatron.utils.hf_config_adapter import model_layer_configs as func
+        return func
+
+    @staticmethod
+    def get_model_name_func() -> Callable:
+        """Return the model_name function reference."""
+        from galvatron.utils.hf_config_adapter import model_name as func
+        return func

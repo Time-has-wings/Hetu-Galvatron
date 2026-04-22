@@ -1,11 +1,25 @@
 # tests/conftest.py
+"""Pytest hooks and fixtures. Ensures vendored ``megatron`` under ``galvatron/site_package`` is importable."""
+import os
+import sys
+import json
+import signal
+import socket
+import subprocess
+import time
+from pathlib import Path
+
 import pytest
 import torch
 import torch.distributed as dist
-import os, sys, json, subprocess
-from typing import Dict, Callable, Tuple    
+from typing import Dict, Callable, List, Tuple
 import tempfile
-from pathlib import Path
+
+
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
 
 @pytest.fixture
 def small_model_config():
@@ -28,46 +42,152 @@ def seed():
     """Return a fixed seed for reproducibility"""
     return 42
 
+def _terminate_process(p: subprocess.Popen, grace: float = 5.0) -> None:
+    """Terminate a process (and its whole session/group), escalating to SIGKILL."""
+    if p.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                return
+        else:
+            p.terminate()
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=grace)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                return
+        else:
+            p.kill()
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 @pytest.fixture
 def run_distributed():
-    """Fixture that provides the distributed test runner"""
-    def _run_distributed(func_name: str, world_size: int, args: Dict, script: str):
+    """Fixture that provides a robust distributed test runner.
+
+    Spawns ``world_size`` subprocesses. If any rank exits non-zero (or the
+    whole run exceeds ``timeout`` seconds), all remaining processes are
+    terminated and the test is failed with the collected output of every
+    rank.
+    """
+    def _run_distributed(
+        func_name: str,
+        world_size: int,
+        args: Dict,
+        script: str,
+        timeout: float = 600.0,
+        poll_interval: float = 0.5,
+    ):
         if torch.cuda.device_count() < world_size:
             pytest.skip(f"Need at least {world_size} GPUs, but got {torch.cuda.device_count()}")
-        
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "34567"
-        os.environ["WORLD_SIZE"] = str(world_size)
-        
-        processes = []
-        for rank in range(world_size):
-            os.environ["RANK"] = str(rank)
-            os.environ["LOCAL_RANK"] = str(rank)
-            
-            cmd = [
-                sys.executable,
-                script,
-                func_name,
-                json.dumps(args)
-            ]
-            
-            p = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            processes.append(p)
 
-        for p in processes:
-            stdout, stderr = p.communicate()
-            retcode = p.poll()
-            
-            if retcode != 0:
-                print(f"Process failed with return code {retcode}")
-                print("stdout:", stdout.decode())
-                print("stderr:", stderr.decode())
-                pytest.fail(f"Distributed test failed with return code {retcode}")
-    
+        master_port = str(_pick_free_port())
+
+        processes: List[subprocess.Popen] = []
+        log_files: List[Tuple[tempfile._TemporaryFileWrapper, tempfile._TemporaryFileWrapper]] = []
+
+        def _collect_outputs() -> str:
+            parts = []
+            for rank, p in enumerate(processes):
+                stdout_f, stderr_f = log_files[rank]
+                try:
+                    stdout_f.flush(); stderr_f.flush()
+                    stdout_f.seek(0); stderr_f.seek(0)
+                    out = stdout_f.read().decode(errors="replace")
+                    err = stderr_f.read().decode(errors="replace")
+                except Exception as e:
+                    out, err = "", f"<failed to read output: {e}>"
+                rc = p.returncode if p.returncode is not None else "running"
+                parts.append(
+                    f"--- rank {rank} (exit={rc}) ---\n"
+                    f"[stdout]\n{out}\n[stderr]\n{err}"
+                )
+            return "\n".join(parts)
+
+        try:
+            for rank in range(world_size):
+                env = os.environ.copy()
+                env["MASTER_ADDR"] = "127.0.0.1"
+                env["MASTER_PORT"] = master_port
+                env["WORLD_SIZE"] = str(world_size)
+                env["RANK"] = str(rank)
+                env["LOCAL_RANK"] = str(rank)
+
+                stdout_f = tempfile.TemporaryFile(mode="w+b")
+                stderr_f = tempfile.TemporaryFile(mode="w+b")
+                log_files.append((stdout_f, stderr_f))
+
+                cmd = [sys.executable, script, func_name, json.dumps(args)]
+                p = subprocess.Popen(
+                    cmd,
+                    stdout=stdout_f,
+                    stderr=stderr_f,
+                    env=env,
+                    start_new_session=True,
+                )
+                processes.append(p)
+
+            deadline = time.monotonic() + timeout
+            failed_rank = None
+            timed_out = False
+
+            while True:
+                all_done = True
+                for rank, p in enumerate(processes):
+                    rc = p.poll()
+                    if rc is None:
+                        all_done = False
+                    elif rc != 0:
+                        failed_rank = rank
+                        break
+                if failed_rank is not None or all_done:
+                    break
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    break
+                time.sleep(poll_interval)
+
+            if failed_rank is not None or timed_out:
+                for p in processes:
+                    _terminate_process(p)
+
+                details = _collect_outputs()
+                if timed_out:
+                    pytest.fail(
+                        f"Distributed test timed out after {timeout:.1f}s\n{details}"
+                    )
+                else:
+                    rc = processes[failed_rank].returncode
+                    pytest.fail(
+                        f"Distributed test failed: rank {failed_rank} exited with code {rc}\n{details}"
+                    )
+        finally:
+            for p in processes:
+                if p.poll() is None:
+                    _terminate_process(p, grace=2.0)
+            for stdout_f, stderr_f in log_files:
+                for f in (stdout_f, stderr_f):
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+
     return _run_distributed
 
 @pytest.fixture

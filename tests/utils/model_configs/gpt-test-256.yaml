@@ -1,0 +1,19 @@
+# Small GPT-2 config (256 hidden) for unit tests
+model_size: gpt
+hidden_size: 256
+num_layers: 4
+num_attention_heads: 8
+ffn_hidden_size: 1024
+vocab_size: 1000
+
+normalization: LayerNorm
+norm_epsilon: 1.0e-5
+activation_func: torch.nn.functional.gelu
+gated_linear_unit: false
+
+position_embedding_type: learned_absolute
+
+add_bias_linear: true
+add_qkv_bias: false
+untie_embeddings_and_output_weights: false
+make_vocab_size_divisible_by: 1

@@ -1,0 +1,57 @@
+name: "Feature Request"
+description: "Suggest a new feature or improvement for Galvatron"
+title: "[FEATURE] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We welcome feature ideas! Please describe the motivation and expected behavior.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - "Profiler"
+        - "Search Engine / Cost Model"
+        - "Runtime / Parallelism"
+        - "Runtime / MoE"
+        - "Model Support"
+        - "Tooling / Scripts"
+        - "Documentation"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why do you need this feature? What problem does it solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe how you envision the feature working.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches you've considered or current workarounds.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional Context
+      description: References, papers, related projects, etc.
+    validations:
+      required: false

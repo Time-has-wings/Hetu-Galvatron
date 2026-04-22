@@ -1,0 +1,26 @@
+# Qwen2.5-7B model config for Galvatron
+# Based on: Qwen/Qwen2.5-7B
+
+model_size: qwen2.5-7b
+hf_model_name_or_path: null
+
+hidden_size: 3584
+num_layers: 28
+num_attention_heads: 28
+num_query_groups: 4            # GQA: 4 KV heads
+ffn_hidden_size: 18944
+vocab_size: 152064
+
+normalization: RMSNorm
+norm_epsilon: 1.0e-6
+activation_func: torch.nn.functional.silu
+gated_linear_unit: true
+
+position_embedding_type: rope
+rotary_base: 1000000
+apply_rope_fusion: true
+
+add_bias_linear: false
+add_qkv_bias: true
+untie_embeddings_and_output_weights: true
+make_vocab_size_divisible_by: 128

@@ -1,0 +1,26 @@
+# Llama-2-70B model config for Galvatron
+# Based on: meta-llama/Llama-2-70b-hf
+
+model_size: llama2-70b
+hf_model_name_or_path: null
+
+hidden_size: 8192
+num_layers: 80
+num_attention_heads: 64
+num_query_groups: 8            # GQA: 8 KV heads
+ffn_hidden_size: 28672
+vocab_size: 32000
+
+normalization: RMSNorm
+norm_epsilon: 1.0e-5
+activation_func: torch.nn.functional.silu
+gated_linear_unit: true
+
+position_embedding_type: rope
+rotary_base: 10000
+apply_rope_fusion: true
+
+add_bias_linear: false
+add_qkv_bias: false
+untie_embeddings_and_output_weights: false
+make_vocab_size_divisible_by: 128

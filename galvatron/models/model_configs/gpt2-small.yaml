@@ -1,0 +1,25 @@
+# GPT-2 Small (124M) model config for Galvatron
+# Based on: openai-community/gpt2
+
+model_size: gpt2-small
+hf_model_name_or_path: null
+
+hidden_size: 768
+num_layers: 12
+num_attention_heads: 12
+num_query_groups: null         # MHA
+ffn_hidden_size: 3072          # hidden_size * 4
+vocab_size: 50257
+
+normalization: LayerNorm
+norm_epsilon: 1.0e-5
+activation_func: torch.nn.functional.gelu
+gated_linear_unit: false
+
+position_embedding_type: learned_absolute
+apply_rope_fusion: false
+
+add_bias_linear: true
+add_qkv_bias: true
+untie_embeddings_and_output_weights: false
+make_vocab_size_divisible_by: 1

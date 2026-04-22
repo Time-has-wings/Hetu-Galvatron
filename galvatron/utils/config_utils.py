@@ -1,9 +1,9 @@
 import json
 import os
-from .strategy_utils import form_strategy
-from typing import List
+from typing import Sequence
 import numpy as np
 from scipy.optimize import curve_fit
+import torch
 
 def str2array(s):
     return list(map(int,s.split(',')))
@@ -16,6 +16,8 @@ def read_json_config(path):
     return json.load(open(path,'r',encoding="utf-8"))
 
 def write_json_config(config, path):
+    if os.path.exists(path) == False:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path,'w') as fp:
         json.dump(config,fp, indent=4)
 
@@ -34,7 +36,7 @@ def config2strategy(config):
     else:
         vcp = 1
     tp_sizes_enc = str2array(config['tp_sizes_enc'])
-    cp_sizes_enc = str2array(config['cp_sizes_enc'])
+    cp_sizes_enc = str2array(config['cp_sizes_enc']) if 'cp_sizes_enc' in config else [1] * len(tp_sizes_enc)
     tp_consecutive_flags = str2array(config['tp_consecutive_flags'])
     dp_types_enc = str2array(config['dp_types_enc'])
     if "use_sp" in config:
@@ -42,19 +44,6 @@ def config2strategy(config):
     else:
         use_sp = [0 for _ in range(len(tp_sizes_enc))]
     return pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp, vcp
-
-def strategy2config(strategy_list):
-    layer_num = len(strategy_list)
-    if layer_num == 0:
-        return {}
-    pp_deg = strategy_list[0][0]
-    tp_sizes_enc = array2str([s[1] for s in strategy_list])
-    tp_consecutive_flags = array2str([0 if 'tp' in s[-1] and not s[-1]['tp'] else 1 for s in strategy_list])
-    dp_types_enc = array2str([1 if 'fsdp' in s[-1] and s[-1]['fsdp'] else 0 for s in strategy_list])
-    sp = array2str([1 if 'sp' in s[-1] and s[-1]['sp'] else 0 for s in strategy_list])
-    
-    config = {"pp_deg":pp_deg, "tp_sizes_enc":tp_sizes_enc, "tp_consecutive_flags":tp_consecutive_flags, "dp_types_enc":dp_types_enc, "use_sp":sp}
-    return config
 
 def read_allreduce_bandwidth_config(config_path, gpu_num):
     if isinstance(config_path, str):
@@ -66,6 +55,10 @@ def read_allreduce_bandwidth_config(config_path, gpu_num):
     if max_dp >= 2:
         bandwidth_dict['%d'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
         comm_coe_dict['%d'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
+        bandwidth_dict['%d_1'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
+        comm_coe_dict['%d_1'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
+        bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_1'%(max_dp)]
+        comm_coe_dict['%d_0'%max_dp]=1.0/bandwidth_dict['%d'%max_dp]
     max_dp = max_dp // 2
     while max_dp >= 2:
         bandwidth_dict['%d_0'%max_dp]=env_config['allreduce_size_%d_consec_0'%(max_dp)]
@@ -75,6 +68,10 @@ def read_allreduce_bandwidth_config(config_path, gpu_num):
         max_dp = max_dp // 2
     bandwidth_dict['1']=np.inf
     comm_coe_dict['1']=0
+    bandwidth_dict['1_1']=np.inf
+    comm_coe_dict['1_1']=0
+    bandwidth_dict['1_0']=np.inf
+    comm_coe_dict['1_0']=0
     return bandwidth_dict, comm_coe_dict
 
 def read_p2p_bandwidth_config(config_path):
@@ -91,14 +88,17 @@ def read_p2p_bandwidth_config(config_path):
     return p2p_dict, comm_coe_dict
 
 def num2str(num, name):
-    if name == 'seq':
-        if len(num) == 1:
-            num = num[0]
-    if isinstance(num, List):
-        info = '%s[%s]'%(name, array2str(num))
-    else:
-        info = '%s%d'%(name, num)
-    return info
+    """Format numeric key parts used in profiling JSON keys.
+
+    Examples:
+    - num2str([2, 4], "layernum") -> "layernum2_4"
+    - num2str([2048], "seq") -> "seq2048"
+    - num2str(2048, "seq") -> "seq2048"
+    """
+    if isinstance(num, Sequence) and not isinstance(num, (str, bytes)):
+        values = list(num)
+        return f"{name}{'_'.join(str(v) for v in values)}"
+    return f"{name}{num}"
 
 def dict_join_dirname(dic, dirname):
     for key, val in dic.items():
@@ -124,6 +124,53 @@ def remap_config(config, op):
         y_data = []
         for size, time in time_config.items():
             x_data.append(size // 1024 // 1024)
+            y_data.append(time)
+        assert len(x_data) >= 8, f"Different size in communication profile of {op} should not be lower than 8."
+    
+        def linear_func(x, m, c):
+            return m * x + c
+        popt, pcov = curve_fit(linear_func, x_data, y_data)
+        
+        print(f"Fitted parameters of {op}", popt)
+        
+        time_config["popt"] = popt
+        
+    return remap_config
+        
+def print_single_rank(message, rank=0):
+    if torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == rank:
+            print(message, flush=True)
+    else:
+        print(message, flush=True)
+
+def remap_config_for_latency(config, op):
+    if op == 'allreduce':
+        key_string = 'allreduce_size'
+        factor = 1
+    elif op == 'all2all':
+        key_string = 'all2all_size'
+        factor = 1
+    elif op == 'allgather':
+        key_string = 'allreduce_size'
+        factor = 0.5
+
+    remap_config = {}
+    for key, val in config.items():
+        if key.startswith(key_string):
+            split = key.split("_")
+            world_size, size = int(split[-3]), int(split[-2][:-2])
+            if world_size in remap_config:
+                remap_config[world_size][size] = val * factor
+            else:
+                remap_config[world_size] = {}
+                remap_config[world_size][size] = val * factor
+    
+    for world_size, time_config in remap_config.items():
+        x_data = []
+        y_data = []
+        for size, time in time_config.items():
+            x_data.append(size)
             y_data.append(time)
         assert len(x_data) >= 8, f"Different size in communication profile of {op} should not be lower than 8."
     

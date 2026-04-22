@@ -9,18 +9,12 @@ import torch.nn as nn
 from torch import Tensor
 
 from galvatron.core.runtime.parallel import wrap_modules_checkpoint, wrap_modules_data_parallel
+from galvatron.core.runtime.parallel_state import get_args
 
 version_str = torch.__version__
 version_major, version_minor, _ = version_str.split(".")
 version_major, version_minor = int(version_major), int(version_minor)
-# if version_major > 1:
-#     if version_minor > 0:
-#        from torch.distributed.fsdp._runtime_utils import _register_post_backward_hook
 
-#     else:
-#        from torch.distributed.fsdp._runtime_utils import _register_post_backward_hooks
-# else:
-#     assert False, f"PyTorch version must be greater than 2.0, but found {torch.__version__}"
 
 from .grad_reduce import *
 from .grad_reduce import (
@@ -99,6 +93,7 @@ class PipelineParallel(nn.Module):
             [i for i in range(self.world_size)] if process_group is None else sorted(list(set(list(process_group))))
         )
         assert self.global_rank in self.pp_global_ranks
+        # TODO: fix the bug when construct the process group
         self.group = torch.distributed.new_group(process_group)
         self.group_size = torch.distributed.get_world_size(self.group)
         self.group_rank = torch.distributed.get_rank(self.group)
@@ -143,12 +138,10 @@ class PipelineParallel(nn.Module):
         self.checkpoint_flags_stage = [0] * (self.stage_end_idx - self.stage_start_idx)
         self.require_loss = require_loss
 
-        from galvatron.core import get_args
-
         args = get_args()
-        self.sequence_parallel = args.sequence_parallel
-        self.shape_order = args.shape_order
-        self.async_grad_reduce = args.async_grad_reduce
+        self.sequence_parallel = True # args.sequence_parallel
+        self.shape_order = args.model.shape_order
+        self.async_grad_reduce = args.parallel.async_grad_reduce
         # if not self.async_grad_reduce and self.group_size > 1:
         #     assert Fasle, "No async grad reduce only support pp = 1"
         # assert async_grad_reduce # Remove support for async_grad_reduce=False, which is the old version for gradient synchronization
@@ -179,10 +172,13 @@ class PipelineParallel(nn.Module):
         dp_types,
         dp_groups,
         module_types,
+        dp_of_ep_groups=None,
         mixed_precision=torch.bfloat16,
         wrap_block_name=None,
         wrap_other_block_name=None,
         tp_groups=None,
+        tp_of_ep_groups=None,
+        ep_groups=None,
         all_block_name=None,
         load_module_func=None,
     ):
@@ -194,18 +190,33 @@ class PipelineParallel(nn.Module):
         dp_groups_cur_stage = dp_groups[self.stage_start_idx : self.stage_end_idx]
         pp_devices_cur_stage = [self.local_rank] * (self.stage_end_idx - self.stage_start_idx)
         tp_groups_cur_stage = tp_groups[self.stage_start_idx : self.stage_end_idx]
-        default_process_group = dp_groups[0]
+        if tp_of_ep_groups is not None:
+           tp_of_ep_groups_cur_stage = tp_of_ep_groups[self.stage_start_idx : self.stage_end_idx]
+        else:
+            tp_of_ep_groups_cur_stage = None
+        if ep_groups is not None:
+            ep_groups_cur_stage = ep_groups[self.stage_start_idx : self.stage_end_idx]
+        else:
+            ep_groups_cur_stage = None
+        if dp_of_ep_groups is not None:
+            dp_of_ep_groups_cur_stage = dp_of_ep_groups[self.stage_start_idx : self.stage_end_idx]
+        else:
+            dp_of_ep_groups_cur_stage = None
+        # default_process_group = dp_groups[0]
         self.model_cur_stage = wrap_modules_data_parallel(
             module_list=self.model_cur_stage,
             dp_types=dp_types_cur_stage,
             dp_groups=dp_groups_cur_stage,
             module_types=module_types_cur_stage,
+            dp_of_ep_groups=dp_of_ep_groups_cur_stage,
             pp_devices=pp_devices_cur_stage,
             mixed_precision=mixed_precision,
-            default_process_group=default_process_group,
+            default_process_group=None,
             wrap_block_name=wrap_block_name,
             wrap_other_block_name=wrap_other_block_name,
             tp_groups=tp_groups_cur_stage,
+            tp_of_ep_groups=tp_of_ep_groups_cur_stage,
+            ep_groups=ep_groups_cur_stage,
             all_block_name=all_block_name,
             load_module_func=load_module_func,
         )
@@ -256,6 +267,7 @@ class PipelineParallel(nn.Module):
                 idx += 1
 
     def set_last_batch(self, state):
+        self.model_cur_stage.last_batch = state
         for block in self.model_cur_stage:
             for m in block.modules():
                 if isinstance(m, FSDP):
@@ -1216,12 +1228,12 @@ class PipelineParallel(nn.Module):
             )
 
         # Split tensor into smaller chunks if using scatter-gather optimization.
-        if not override_scatter_gather_tensors_in_pipeline and scatter_gather_tensors_in_pipeline:
-            if tensor_send_next is not None:
-                tensor_send_next = split_tensor_into_1d_equal_chunks(tensor_send_next)
+        # if not override_scatter_gather_tensors_in_pipeline and scatter_gather_tensors_in_pipeline:
+        #     if tensor_send_next is not None:
+        #         tensor_send_next = split_tensor_into_1d_equal_chunks(tensor_send_next)
 
-            if tensor_send_prev is not None:
-                tensor_send_prev = split_tensor_into_1d_equal_chunks(tensor_send_prev)
+        #     if tensor_send_prev is not None:
+        #         tensor_send_prev = split_tensor_into_1d_equal_chunks(tensor_send_prev)
 
         def p2p_type(tensor_send_prev, tensor_send_next, tensor_recv_prev, tensor_recv_next):
             commtype = ""
@@ -1247,12 +1259,12 @@ class PipelineParallel(nn.Module):
             print("rank %d" % self.global_rank, "done p2p", commtype)
 
         # If using scatter-gather optimization, gather smaller chunks.
-        if not override_scatter_gather_tensors_in_pipeline and scatter_gather_tensors_in_pipeline:
-            if recv_prev:
-                tensor_recv_prev = gather_split_1d_tensor(tensor_recv_prev).view(tensor_shape).requires_grad_()
+        # if not override_scatter_gather_tensors_in_pipeline and scatter_gather_tensors_in_pipeline:
+        #     if recv_prev:
+        #         tensor_recv_prev = gather_split_1d_tensor(tensor_recv_prev).view(tensor_shape).requires_grad_()
 
-            if recv_next:
-                tensor_recv_next = gather_split_1d_tensor(tensor_recv_next).view(tensor_shape).requires_grad_()
+        #     if recv_next:
+        #         tensor_recv_next = gather_split_1d_tensor(tensor_recv_next).view(tensor_shape).requires_grad_()
 
         return tensor_recv_prev, tensor_recv_next
 

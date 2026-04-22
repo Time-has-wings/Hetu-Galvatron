@@ -47,9 +47,9 @@ def save_profiled_memory(
         config[key] = {}
     layernum_info = num2str(layer_num, "layernum")
     seq_info = num2str(seq, "seq")
-    config[key]["%s_bsz%d_%s_rank%d_ms" % (layernum_info, bsz, seq_info, rank)] = model_states
-    config[key]["%s_bsz%d_%s_rank%d_act" % (layernum_info, bsz, seq_info, rank)] = activation
-    config[key]["%s_bsz%d_%s_rank%d_act_peak" % (layernum_info, bsz, seq_info, rank)] = activation_peak
+    config[key][f"{layernum_info}_bsz{bsz}_{seq_info}_rank{rank}_ms"] = model_states
+    config[key][f"{layernum_info}_bsz{bsz}_{seq_info}_rank{rank}_act"] = activation
+    config[key][f"{layernum_info}_bsz{bsz}_{seq_info}_rank{rank}_act_peak"] = activation_peak
     write_json_config(config, path)
     print("Already written profiled memory into config file %s!\n" % (path))
 
@@ -58,7 +58,7 @@ def save_profiled_time(path, time, bsz, layer_num, seq):
     config = read_json_config(path) if os.path.exists(path) else {}
     layernum_info = num2str(layer_num, "layernum")
     seq_info = num2str(seq, "seq")
-    key = "%s_bsz%d_%s" % (layernum_info, bsz, seq_info)
+    key = f"{layernum_info}_bsz{bsz}_{seq_info}"
     config[key] = time
     write_json_config(config, path)
     print("Already written profiled time into config file %s!\n" % (path))

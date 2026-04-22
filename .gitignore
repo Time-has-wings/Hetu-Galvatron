@@ -6,3 +6,7 @@ build/
 .coverage
 .coveragerc
 coverage.xml
+*.log
+.eggs/
+*.tar.gz
+__pycache__

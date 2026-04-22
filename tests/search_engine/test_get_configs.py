@@ -1,20 +1,43 @@
-import pytest
 from pathlib import Path
-from typing import Tuple
+from types import SimpleNamespace
+import pytest
 from tests.utils.search_configs import (
     write_time_config,
     write_memory_config,
     write_hardware_config
 )
-from tests.utils.search_args import SearchArgs
+from galvatron.core.search_engine.args_schema import GalvatronSearchArgs
 from tests.utils.model_utils import ModelFactory
-from tests.models.configs.get_config_json import ConfigFactory
 from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
+from galvatron.utils.hf_config_adapter import model_layer_configs, model_name
+
+
+def _build_hf_test_args(config_json, time_mode):
+    model_ns = SimpleNamespace(
+        model_size=config_json.get("model_size", "llama2-7b"),
+        hf_model_name_or_path=config_json.get("hf_model_name_or_path"),
+        hidden_size=config_json.get("hidden_size"),
+        num_layers=config_json.get("num_hidden_layers", config_json.get("num_layers")),
+        num_attention_heads=config_json.get("num_attention_heads"),
+        ffn_hidden_size=config_json.get("intermediate_size", config_json.get("ffn_hidden_size")),
+        vocab_size=config_json.get("vocab_size"),
+    )
+    train_ns = SimpleNamespace(seq_length=config_json.get("seq_length", 4096))
+    profile_ns = SimpleNamespace(profile_mode=time_mode)
+    return SimpleNamespace(model=model_ns, train=train_ns, profile=profile_ns)
+
+
+def _promote_profile_filenames_to_all(configs_dir: Path, precision: str, model: str):
+    time_src = configs_dir / f"computation_profiling_{precision}_{model}.json"
+    time_dst = configs_dir / f"computation_profiling_{precision}_{model}_all.json"
+    mem_src = configs_dir / f"memory_profiling_{precision}_{model}.json"
+    mem_dst = configs_dir / f"memory_profiling_{precision}_{model}_all.json"
+    shutil.copyfile(time_src, time_dst)
+    shutil.copyfile(mem_src, mem_dst)
 
 # ============= Model Config Tests =============
 @pytest.mark.search_engine
 @pytest.mark.parametrize("model_type", ["gpt"])
-@pytest.mark.parametrize("backend", ["hf"])
 @pytest.mark.parametrize("time_mode,memory_mode,sp_enabled", [
     ("static", "static", False),
     ("batch", "static", False),
@@ -26,32 +49,33 @@ from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
     ("batch", "sequence", True),
     ("sequence", "sequence", True),
 ])
-def test_config_loading(base_config_dirs, model_type, backend, time_mode, memory_mode, sp_enabled):
+def test_config_loading(base_config_dirs, model_type, time_mode, memory_mode, sp_enabled):
     """Test loading both time and memory configs with different modes"""
     _, configs_dir, _ = base_config_dirs
 
     # Setup search engine
-    args = SearchArgs()
-    model_layer_configs, model_name = ModelFactory.get_meta_configs(model_type, backend)
-    config_json = ConfigFactory.get_config_json(model_type)
-    args.model_size = config_json
-    args.local_rank = 0
-    config = ModelFactory.create_config(model_type, backend, args)
+    args = GalvatronSearchArgs()
+    # args.model_info.model_size = config_json
     
 
-    args.time_profiling_path = str(configs_dir)
-    args.memory_profiling_path = str(configs_dir)
-    args.time_profile_mode = time_mode
-    args.memory_profile_mode = memory_mode
-    args.sequence_parallel = sp_enabled
+    args.profiling_info.time_profiling_path = str(configs_dir)
+    args.profiling_info.memory_profiling_path = str(configs_dir)
+    args.profiling_info.time_profile_mode = time_mode
+    args.profiling_info.memory_profile_mode = memory_mode
+    args.common_train_info.sequence_parallel = sp_enabled
+
+    ModelFactory.resolve_model_config(args, model_type)
+    model_layer_configs_func = ModelFactory.get_model_layer_configs_func()
+    model_name_func = ModelFactory.get_model_name_func()
+    
     search_engine = GalvatronSearchEngine(args)
-    search_engine.set_search_engine_info(str(configs_dir.parent), model_layer_configs(config), model_name(config))
+    search_engine.set_search_engine_info(str(configs_dir.parent), model_layer_configs_func(args), model_name_func(args))
     if model_type == "gpt":
         search_engine.seqlen_list = [4096]
 
     # Write both config files
-    write_time_config(configs_dir, profile_mode=time_mode, model_name=model_name(config))
-    write_memory_config(configs_dir, profile_mode=memory_mode, sp_mode=sp_enabled, model_name=model_name(config))
+    write_time_config(configs_dir, profile_mode=time_mode, model_name=model_name_func(args))
+    write_memory_config(configs_dir, profile_mode=memory_mode, sp_mode=sp_enabled, model_name=model_name_func(args))
     
     # Get configs and verify
     time_config, memory_config = search_engine.get_profiled_model_configs()
@@ -98,13 +122,13 @@ def test_hardware_config_loading(base_config_dirs, num_nodes, gpus_per_node):
     _, hardware_dir, _ = base_config_dirs
     write_hardware_config(hardware_dir, num_nodes=num_nodes, gpus_per_node=gpus_per_node)
     
-    args = SearchArgs()
-    args.num_nodes = num_nodes
-    args.num_gpus_per_node = gpus_per_node
-    args.allreduce_bandwidth_config_path = str(hardware_dir)
-    args.p2p_bandwidth_config_path = str(hardware_dir)
-    args.overlap_coe_path = str(hardware_dir)
-    args.sp_time_path = str(hardware_dir)
+    args = GalvatronSearchArgs()
+    args.hardware_info.num_nodes = num_nodes
+    args.hardware_info.num_gpus_per_node = gpus_per_node
+    args.profiling_info.allreduce_bandwidth_config_path = str(hardware_dir)
+    args.profiling_info.p2p_bandwidth_config_path = str(hardware_dir)
+    args.profiling_info.overlap_coe_path = str(hardware_dir)
+    args.profiling_info.sp_time_path = str(hardware_dir)
     engine = GalvatronSearchEngine(args)
     engine.set_path(str(hardware_dir.parent))
     allreduce_bandwidth, p2p_bandwidth, overlap_coe, sp_allreduce, sp_all2all = engine.get_profiled_hardware_configs()

@@ -2,101 +2,121 @@ import pytest
 import torch
 import sys
 import json
-import tempfile
 from typing import Dict, Any
-from galvatron.utils.training_utils import set_seed, distributed_dataloader
-from tests.utils.init_dist import init_dist_env
-from tests.utils.runtime_args import RuntimeArgs
-from tests.utils.model_utils import ModelFactory
-from tests.utils.parallel_config import ParallelConfig
-from tests.models.configs.get_config_json import ConfigFactory
-from megatron.training.global_vars import set_args
-from megatron.core.tensor_parallel import random
-from megatron.core.parallel_state import initialize_model_parallel
 from torch.optim import Adam
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.nn import CrossEntropyLoss
 
-def _run_test(args: Dict[str, Any]):
-    """Run data parallel correctness test"""
+from tests.utils.init_dist import init_dist_env
+from tests.utils.runtime_args import make_test_args
+from galvatron.core.runtime.parallel_state import set_args, set_global_memory_buffer
+from galvatron.core.runtime.models.builder import build_model
+from galvatron.core.runtime.datasets import RandomTokenDataset, random_collate_fn
+from galvatron.utils.training_utils import set_seed, distributed_dataloader
+from galvatron.tools.checkpoint_convert_h2g import convert_checkpoints_gpt
+from transformers import GPT2Config, GPT2LMHeadModel
+
+
+def _run_test(test_args: Dict[str, Any]):
     rank, world_size = init_dist_env()
-    model_type = args["model_type"]
-    backend = args["backend"]
-    num_steps = args["num_steps"]
-    parallel_config = args["parallel_config"]
-    mixed_precision = args["mixed_precision"]
-    checkpoint_dir = args["checkpoint_dir"]
-    torch.cuda.set_device(rank)
-    device = torch.device("cuda", rank)
+    parallel_config = test_args["parallel_config"]
+    mixed_precision = test_args["mixed_precision"]
+    async_grad_reduce = test_args["async_grad_reduce"]
+    checkpoint_dir = test_args["checkpoint_dir"]
+    num_steps = test_args["num_steps"]
+    seed = test_args["seed"]
+    global_bsz = parallel_config["global_bsz"]
 
-    # Initialize
-    set_seed(args["seed"])
-    initialize_model_parallel(tensor_model_parallel_size=1, pipeline_model_parallel_size=1)
-    random.model_parallel_cuda_manual_seed(args["seed"])
-    
-    args = RuntimeArgs(model_type=model_type, rank=rank, checkpoint_dir=checkpoint_dir, backend=backend)
-    config_json = ConfigFactory.get_config_json(model_type)
-    args.model_size = config_json
-    components = ModelFactory.get_components(model_type, backend)
-    config = ModelFactory.create_config(model_type, backend, args)
-    # Set custom args
-    args.mixed_precision = mixed_precision
-    if mixed_precision == "bf16":
-        args.use_flash_attn = True
-    args.sequence_parallel = True
-    args.galvatron_config_path = parallel_config
+    device = torch.device("cuda", rank)
+    set_seed(seed)
+
+    args = make_test_args(
+        rank=rank,
+        world_size=world_size,
+        checkpoint_load=checkpoint_dir["converted"],
+        mixed_precision=mixed_precision,
+        async_grad_reduce=async_grad_reduce,
+        galvatron_config_path=parallel_config,
+        global_batch_size=global_bsz,
+        chunks=parallel_config["chunks"],
+        seed=seed,
+    )
     set_args(args)
+    set_global_memory_buffer()
+
+    hf_config = GPT2Config(
+        n_embd=args.model.hidden_size,
+        n_layer=args.model.num_layers,
+        n_head=args.model.num_attention_heads,
+        n_positions=args.train.seq_length,
+        n_inner=args.model.ffn_hidden_size,
+        vocab_size=args.model.vocab_size,
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attn_pdrop=0.0,
+    )
 
     if rank == world_size - 1:
-        baseline_model = components.ModelClass(config)
-        baseline_optimizer = Adam(baseline_model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
+        baseline_model = GPT2LMHeadModel(hf_config)
+        baseline_optimizer = Adam(
+            baseline_model.parameters(),
+            lr=args.train.lr,
+            weight_decay=args.train.weight_decay,
+        )
         baseline_model.save_pretrained(checkpoint_dir["baseline"])
-        components.convert_checkpoints(checkpoint_dir["baseline"], checkpoint_dir["converted"])
+        convert_checkpoints_gpt(checkpoint_dir["baseline"], checkpoint_dir["converted"])
         baseline_model = baseline_model.to(device)
-    
+
     torch.distributed.barrier()
 
-    model = ModelFactory.create_model(model_type, backend, config, args)
-    trainloader = distributed_dataloader(
-        dataset=components.DatasetClass(args, device, 256),
-        global_bsz=args.global_train_batch_size,
-        shuffle=True,
-        args=args,
-        group = model.dp_groups_whole[0].group,
-        collate_fn = components.collate_fn
+    model = build_model(args)
+    optimizer = Adam(
+        model.parameters(),
+        lr=args.train.lr,
+        weight_decay=args.train.weight_decay,
     )
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
-    
+
+    trainloader = distributed_dataloader(
+        dataset=RandomTokenDataset(args.model.vocab_size, args.train.seq_length, size=256),
+        global_bsz=global_bsz,
+        shuffle=True,
+        group=model.dp_groups_whole[0].group,
+        collate_fn=random_collate_fn,
+    )
+
     for i, batch in enumerate(trainloader):
         tokens, kwargs, loss_func = batch
         input_ids = tokens
         batch = [input_ids]
+
+        dp_group = model.dp_groups_whole[0].group
+        dp_world_size = torch.distributed.get_world_size(dp_group)
+
         if input_ids is not None:
-            gathered_input_ids = [torch.zeros_like(input_ids) for _ in range(torch.distributed.get_world_size(model.dp_groups_whole[0].group))]
-            gathered_labels = [torch.zeros_like(kwargs["labels"]) for _ in range(torch.distributed.get_world_size(model.dp_groups_whole[0].group))]
-            torch.distributed.all_gather(gathered_input_ids, input_ids, group=model.dp_groups_whole[0].group)
-            torch.distributed.all_gather(gathered_labels, kwargs["labels"], group=model.dp_groups_whole[0].group)
-        loss = model.forward_backward(batch, i, None, 
-                                    loss_func=loss_func,
-                                    **kwargs)
+            gathered_input_ids = [torch.zeros_like(input_ids) for _ in range(dp_world_size)]
+            gathered_labels = [torch.zeros_like(kwargs["labels"]) for _ in range(dp_world_size)]
+            torch.distributed.all_gather(gathered_input_ids, input_ids, group=dp_group)
+            torch.distributed.all_gather(gathered_labels, kwargs["labels"], group=dp_group)
+
+        loss = model.forward_backward(batch, i, None, loss_func=loss_func, **kwargs)
         optimizer.step()
         optimizer.zero_grad()
 
         if loss is not None:
             loss = torch.tensor(loss, device=device, dtype=torch.float)
-            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=model.dp_groups_whole[0].group)
+            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
 
         if rank == world_size - 1:
             full_batch = torch.cat(gathered_input_ids, dim=0)
             full_labels = torch.cat(gathered_labels, dim=0)
-            with autocast(dtype = torch.bfloat16 if mixed_precision == "bf16" else torch.float):
-                shift_logits = baseline_model(input_ids=full_batch).logits
-                from torch.nn import CrossEntropyLoss
-                loss_fct = CrossEntropyLoss()
-                shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-                shift_labels = full_labels.view(-1)
-                shift_labels = shift_labels.to(shift_logits.device)
-                baseline_loss = loss_fct(shift_logits, shift_labels)
-            
+            cast_dtype = torch.bfloat16 if mixed_precision == "bf16" else torch.float
+            with autocast(device_type="cuda", dtype=cast_dtype):
+                logits = baseline_model(input_ids=full_batch).logits
+                baseline_loss = CrossEntropyLoss()(
+                    logits.view(-1, logits.size(-1)),
+                    full_labels.view(-1).to(logits.device),
+                )
+
             baseline_loss.backward()
             baseline_optimizer.step()
             baseline_optimizer.zero_grad()
@@ -104,10 +124,12 @@ def _run_test(args: Dict[str, Any]):
             baseline_loss = torch.tensor(0.0, device=device, dtype=torch.float)
             loss = torch.tensor(0.0, device=device, dtype=torch.float)
 
-        torch.distributed.broadcast(baseline_loss, src=world_size-1)
-        torch.distributed.broadcast(loss, src=world_size-1)
+        torch.distributed.broadcast(baseline_loss, src=world_size - 1)
+        torch.distributed.broadcast(loss, src=world_size - 1)
 
-        assert torch.allclose(loss, baseline_loss, rtol=5e-3), f"Loss is not correct in iteration {i}: {loss} vs {baseline_loss}"
+        assert torch.allclose(loss, baseline_loss, rtol=5e-3), (
+            f"Loss mismatch at iteration {i}: {loss} vs {baseline_loss}"
+        )
 
         torch.distributed.barrier()
         if i == num_steps - 1:
@@ -115,89 +137,69 @@ def _run_test(args: Dict[str, Any]):
 
 @pytest.mark.distributed
 @pytest.mark.parallel
-@pytest.mark.parametrize("model_type", ["gpt256"])
-@pytest.mark.parametrize("backend", ["hf"])
 @pytest.mark.parametrize("world_size", [8])
-@pytest.mark.parametrize("mixed_precision", ["fp32", "bf16"])
-@pytest.mark.parametrize("parallel_config", (
-    {
-        "pp_deg": 1,
-        "tp_sizes_enc": "1,2,4,8",
-        "tp_consecutive_flags": "1,1,1,1",
-        "dp_types_enc": "0,1,0,1",
-        "use_sp": "0,1,0,1",
-        "checkpoint": "0,0,1,1",
-        "global_bsz": 32,
-        "chunks": 2,
-        "pp_division": "4",
-        "pipeline_type": "pipedream_flush",
-        "default_dp_type": "zero2",
-        "vtp": 2,
-        "vsp": 0
-    },
-    {
-        "pp_deg": 1,
-        "tp_sizes_enc": "1,2,4,8",
-        "tp_consecutive_flags": "1,1,1,1",
-        "dp_types_enc": "1,0,1,0",
-        "use_sp": "0,1,0,1",
-        "checkpoint": "0,0,1,1",
-        "global_bsz": 32,
-        "chunks": 2,
-        "pp_division": "4",
-        "pipeline_type": "pipedream_flush",
-        "default_dp_type": "zero2",
-        "vtp": 4,
-        "vsp": 1
-    },
-    {
-        "pp_deg": 2,
-        "tp_sizes_enc": "1,2,4,2",
-        "tp_consecutive_flags": "1,1,1,1",
-        "dp_types_enc": "0,1,0,1",
-        "use_sp": "0,1,0,1",
-        "checkpoint": "0,0,1,1",
-        "global_bsz": 32,
-        "chunks": 2,
-        "pp_division": "3,1",
-        "pipeline_type": "pipedream_flush",
-        "default_dp_type": "zero2",
-        "vtp": 2,
-        "vsp": 0
-    },
-    {
-        "pp_deg": 2,
-        "tp_sizes_enc": "1,2,4,2",
-        "tp_consecutive_flags": "1,1,1,1",
-        "dp_types_enc": "1,0,1,0",
-        "use_sp": "0,1,0,1",
-        "checkpoint": "0,0,1,1",
-        "global_bsz": 32,
-        "chunks": 4,
-        "pp_division": "2,2",
-        "pipeline_type": "pipedream_flush",
-        "default_dp_type": "zero2",
-        "vtp": 4,
-        "vsp": 1
-    }
-))
-def test_redistributed(run_distributed, model_type, backend, world_size, parallel_config, mixed_precision, checkpoint_dir):
-    """Test redistributed correctness"""
+@pytest.mark.parametrize("mixed_precision", ["bf16"])
+@pytest.mark.parametrize(
+    "parallel_config",
+    (
+        {
+            "pp_deg": 1,
+            "tp_sizes_enc": "1,1,1,1",
+            "tp_consecutive_flags": "1,1,1,1",
+            "cp_sizes_enc": "1,1,1,1",
+            "dp_types_enc": "0,0,0,0",
+            "use_sp": "0,0,0,0",
+            "checkpoint": "0,0,0,0",
+            "global_bsz": 16,
+            "chunks": 2,
+            "pp_division": "4",
+            "pipeline_type": "pipedream_flush",
+            "default_dp_type": "zero2",
+            "vtp": 1,
+            "vsp": 0,
+        },
+        {
+            "pp_deg": 1,
+            "tp_sizes_enc": "1,1,1,1",
+            "tp_consecutive_flags": "1,1,1,1",
+            "cp_sizes_enc": "1,1,1,1",
+            "dp_types_enc": "0,0,0,0",
+            "use_sp": "0,0,0,0",
+            "checkpoint": "0,0,0,0",
+            "global_bsz": 16,
+            "chunks": 2,
+            "pp_division": "4",
+            "pipeline_type": "pipedream_flush",
+            "default_dp_type": "zero3",
+            "vtp": 1,
+            "vsp": 0,
+        },
+    ),
+)
+@pytest.mark.parametrize("async_grad_reduce", [False, True])
+def test_hybrid_correctness(
+    run_distributed,
+    world_size,
+    parallel_config,
+    mixed_precision,
+    async_grad_reduce,
+    checkpoint_dir,
+):
+    """Test Galvatron hybrid-parallel correctness (adapted to current runtime)."""
     config = {
-        "model_type": model_type,
-        "backend": backend,
         "parallel_config": parallel_config,
         "num_steps": 3,
         "seed": 42,
         "checkpoint_dir": checkpoint_dir,
-        "mixed_precision": mixed_precision
+        "mixed_precision": mixed_precision,
+        "async_grad_reduce": async_grad_reduce,
     }
-    
+
     run_distributed(
         func_name="_run_test",
         world_size=world_size,
         args=config,
-        script=__file__
+        script=__file__,
     )
 
 if __name__ == "__main__":

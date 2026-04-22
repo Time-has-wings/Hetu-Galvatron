@@ -23,7 +23,7 @@ def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None, gro
     return trainloader
 
 def print_loss(args, loss, ep, iter):
-    if args.check_loss or args.profile:
+    if args.print_loss or args.profile:
         if loss is None:
             return
         if isinstance(loss, (list, tuple)): # Average loss of each microbatch
@@ -39,3 +39,23 @@ def print_loss(args, loss, ep, iter):
             print('(Iteration %d): Loss = %.3f'% (iter,loss))
         else:
             print('[Epoch %d] (Iteration %d): Loss = %.3f'% (ep,iter,loss))
+
+def gen_profiling_groups(group_size, consecutive):
+    """Build process groups for hardware profiling (same layout as training TP groups).
+
+    Must be called after ``init_process_group``. Each rank joins one subgroup of size
+    ``group_size``; consecutive layout matches ``global_tp_consec==1``, strided layout
+    matches ``global_tp_consec==0``.
+    """
+    world_size = torch.distributed.get_world_size()
+    rank = torch.distributed.get_rank()
+    comm_group = None
+    for i in range(world_size // group_size):
+        if consecutive:
+            new_group = range(i * group_size, (i + 1) * group_size)
+        else:
+            new_group = range(i, world_size, world_size // group_size)
+        new_process_group = torch.distributed.new_group(ranks=list(new_group))
+        if rank in new_group:
+            comm_group = new_process_group
+    return comm_group
