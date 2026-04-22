@@ -69,7 +69,7 @@ jobs:
       # ── Plan B: Custom API (fallback) ──
       - name: "AI summary (Custom API fallback)"
         id: summary_custom
-        if: steps.summary_github.outcome == 'failure' && secrets.LLM_API_KEY != ''
+        if: steps.summary_github.outcome == 'failure'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_ENDPOINT: ${{ secrets.LLM_ENDPOINT }}
