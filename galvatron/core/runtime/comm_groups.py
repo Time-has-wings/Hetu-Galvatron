@@ -1,5 +1,6 @@
-from typing import List, Dict
+from typing import Dict, List, Tuple
 import torch
+
 
 class CommGroup(object):
     def __init__(self, ranks:List[int]):
@@ -12,6 +13,18 @@ class CommGroup(object):
 
     def print(self):
         print(self.ranks, end=" ")
+
+
+class CommGroupCache(object):
+    def __init__(self):
+        self.cache: Dict[Tuple[str, Tuple[int, ...]], CommGroup] = {}
+
+    def get(self, domain: str, ranks) -> CommGroup:
+        ranks = tuple(sorted(set(ranks)))
+        key = (domain, ranks)
+        if key not in self.cache:
+            self.cache[key] = CommGroup(list(ranks))
+        return self.cache[key]
 
 
 def show_groups(groups:List[CommGroup]):
@@ -87,7 +100,7 @@ def build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tp-sp')
     without changing the per-dim degrees.
     """
     assert sorted(name2size.keys()) == sorted(['pp', 'dp', 'cp', 'tp', 'sp']) or sorted(name2size.keys()) == sorted(['pp', 'ep', 'edp', 'etp']), f'name2size keys must be pp, dp, cp, tp, sp or pp, ep, edp, etp'
-    
+
     name_list = order.split('-')
     stride_list = [1] * len(name_list)
     for i in range(len(name_list) - 2, -1, -1):
@@ -99,11 +112,17 @@ def build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tp-sp')
         for i, name in enumerate(name_list):
             info[name] = (rank // stride_list[i]) % name2size[name]
         res[rank] = info
-    
-    return res 
+
+    return res
 
 
-def get_groups(degree_rank_dict:Dict[int, Dict[str, int]], ignore_keys=[], manual_global_rank=-1) -> tuple[CommGroup, List[CommGroup]]:
+def get_groups(
+    degree_rank_dict:Dict[int, Dict[str, int]],
+    ignore_keys=[],
+    manual_global_rank=-1,
+    group_cache: CommGroupCache=None,
+    cache_domain: str="",
+) -> tuple[CommGroup, List[CommGroup]]:
     """
     Group ranks that share the same parallel coordinates **after dropping the
     dimensions listed in `ignore_keys`**. The intuition: a "TP group" is the
@@ -117,6 +136,9 @@ def get_groups(degree_rank_dict:Dict[int, Dict[str, int]], ignore_keys=[], manua
                           of the grouping key. Ranks that match on every OTHER
                           coordinate land in the same group.
         manual_global_rank: override `torch.distributed.get_rank()` for tests.
+        group_cache: shared cache used to reuse communication groups with the
+                     same domain and ranks.
+        cache_domain: namespace for cached groups, e.g. "tp", "dp", "embedding".
 
     Returns:
         (owner_group, all_groups):
@@ -171,9 +193,9 @@ def get_groups(degree_rank_dict:Dict[int, Dict[str, int]], ignore_keys=[], manua
 
     all_groups:List[CommGroup] = []
     owner_group:CommGroup = None
-    
+
     for ranks in same_deg_dict.values():
-        group = CommGroup(ranks)
+        group = group_cache.get(cache_domain, ranks)
         all_groups.append(group)
         if group.has_rank(global_rank):
             owner_group = group
@@ -181,24 +203,30 @@ def get_groups(degree_rank_dict:Dict[int, Dict[str, int]], ignore_keys=[], manua
     return owner_group, all_groups
 
 
-def get_embedding_group(pp_size, pp_groups:List[CommGroup], manual_global_rank=-1) -> tuple[CommGroup, List[CommGroup]]:
+def get_embedding_group(
+    pp_size,
+    pp_group:CommGroup,
+    pp_groups:List[CommGroup]=None,
+    manual_global_rank=-1,
+    group_cache: CommGroupCache=None,
+) -> CommGroup:
     global_rank = manual_global_rank if manual_global_rank != -1 else torch.distributed.get_rank()
-
-    all_groups:List[CommGroup] = []
-    owner_group:CommGroup = None
-
-    for pp_group in pp_groups:
-        embedding_ranks = [pp_group.ranks[0], pp_group.ranks[-1]] if pp_size > 1 else [pp_group.ranks[0]]
-        group = CommGroup(embedding_ranks)
-        all_groups.append(group)
+    pp_groups = pp_groups if pp_groups is not None else [pp_group]
+    embedding_group = None
+    for group in pp_groups:
+        embedding_ranks = [group.ranks[0], group.ranks[-1]] if pp_size > 1 else [group.ranks[0]]
+        group = group_cache.get("embedding", embedding_ranks)
         if group.has_rank(global_rank):
-            owner_group = group
-
-    return owner_group, all_groups
+            embedding_group = group
+    return embedding_group
 
 
 # TODO: Check correctness
-def merge_redistributed_group(split_tp_sp_cp_group:CommGroup, allgather_tp_sp_cp_group:CommGroup):
+def merge_redistributed_group(
+    split_tp_sp_cp_group:CommGroup,
+    allgather_tp_sp_cp_group:CommGroup,
+    group_cache: CommGroupCache=None,
+):
     assert split_tp_sp_cp_group is not None and allgather_tp_sp_cp_group is not None, "split_tp_sp_cp_group and allgather_tp_sp_cp_group must not be None"
 
     rank = torch.distributed.get_rank()
@@ -208,22 +236,24 @@ def merge_redistributed_group(split_tp_sp_cp_group:CommGroup, allgather_tp_sp_cp
     allgather_tp_sp_cp_size = allgather_tp_sp_cp_group.size
 
     if split_tp_sp_cp_size > allgather_tp_sp_cp_size:
+        fused_group = None
         num_tp_sp_cp_groups = world_size // split_tp_sp_cp_size
         # mul = split_tp_sp_cp_size // allgather_tp_sp_cp_size
         for i in range(num_tp_sp_cp_groups):
             for j in range(allgather_tp_sp_cp_size):
                 ranks = range(i * split_tp_sp_cp_size + j, (i + 1) * split_tp_sp_cp_size + j, allgather_tp_sp_cp_size)
-                group = CommGroup(ranks)
+                group = group_cache.get("fused_split", ranks)
                 if group.has_rank(rank):
                     fused_group = group
         return fused_group, None
     elif split_tp_sp_cp_size < allgather_tp_sp_cp_size:
+        fused_group = None
         num_tp_sp_cp_groups = world_size // allgather_tp_sp_cp_size
         # mul = allgather_tp_sp_cp_size // split_tp_sp_cp_size
         for i in range(num_tp_sp_cp_groups):
             for j in range(split_tp_sp_cp_size):
                 ranks = range(i * allgather_tp_sp_cp_size + j, (i + 1) * allgather_tp_sp_cp_size + j, split_tp_sp_cp_size)
-                group = CommGroup(ranks)
+                group = group_cache.get("fused_allgather", ranks)
                 if group.has_rank(rank):
                     fused_group = group
         return None, fused_group
@@ -234,21 +264,21 @@ def merge_redistributed_group(split_tp_sp_cp_group:CommGroup, allgather_tp_sp_cp
 
 
 def gen_comm_groups(
-    all_tp_sizes:List[int], 
-    all_sp_sizes:List[int], 
-    all_cp_sizes:List[int], 
-    all_ep_sizes:List[int], 
-    all_tp_of_ep_sizes:List[int], 
+    all_tp_sizes:List[int],
+    all_sp_sizes:List[int],
+    all_cp_sizes:List[int],
+    all_ep_sizes:List[int],
+    all_tp_of_ep_sizes:List[int],
     pp_size:int,
-    is_moe_model:bool=False, 
-    show_rank=-1, 
-    manual_world_size=-1,
+    is_moe_model:bool=False,
+    show_rank=-1,
 ):
     # [Step 1] Input Check and Some Preparations
     assert all(not (tp > 1 and sp > 1) for tp, sp in zip(all_tp_sizes, all_sp_sizes)), "DeepSpeed Ulysses is not compatible with Megatron Tensor Parallel!"
 
-    world_size = torch.distributed.get_world_size() if manual_world_size == -1 else manual_world_size
+    world_size = torch.distributed.get_world_size()
     total_num = len(all_tp_sizes)
+    group_cache = CommGroupCache()
 
     # [Step 2] build rank to parallel coords
     pp_group:CommGroup = None
@@ -260,54 +290,35 @@ def gen_comm_groups(
     sdp_groups:List[CommGroup] = []
     tsp_cp_groups:List[CommGroup] = []
 
-    # Collect unique (tp, sp, cp) configs preserving first-seen order (deterministic across ranks).
-    unique_keys: List[tuple] = []
-    seen = set()
     for i in range(total_num):
-        key = (all_tp_sizes[i], all_sp_sizes[i], all_cp_sizes[i])
-        if key not in seen:
-            seen.add(key)
-            unique_keys.append(key)
-
-    # Build comm groups once per unique config.
-    config_to_groups: Dict[tuple, Dict[str, CommGroup]] = {}
-    for idx, key in enumerate(unique_keys):
-        tp_size, sp_size, cp_size = key
-        dp_size = world_size // pp_size // tp_size // sp_size // cp_size
+        dp_size = world_size // pp_size // all_tp_sizes[i] // all_sp_sizes[i] // all_cp_sizes[i]
         name2size = {
             'pp': pp_size,
             'dp': dp_size,
-            'cp': cp_size,
-            'tp': tp_size,
-            'sp': sp_size,
+            'cp': all_cp_sizes[i],
+            'tp': all_tp_sizes[i],
+            'sp': all_sp_sizes[i],
         }
         degree_rank_dict = build_rank_to_parallel_coords(world_size, name2size, order='pp-dp-cp-tp-sp')
 
-        if idx == 0:
-            pp_group, pp_groups = get_groups(degree_rank_dict, ignore_keys=['pp'])
-            # embedding_group = get_embedding_group(pp_size, pp_group)
-            embedding_group, _ = get_embedding_group(pp_size, pp_groups)
+        if i == 0:
+            pp_group, pp_groups = get_groups(degree_rank_dict, ignore_keys=['pp'], group_cache=group_cache, cache_domain="pp")
+            embedding_group = get_embedding_group(pp_size, pp_group, pp_groups, group_cache=group_cache)
 
-        groups: Dict[str, CommGroup] = {}
-        groups['tp'], _ = get_groups(degree_rank_dict, ignore_keys=['tp'])
-        groups['sp'], _ = get_groups(degree_rank_dict, ignore_keys=['sp'])
-        groups['sdp'], _ = get_groups(degree_rank_dict, ignore_keys=['dp', 'sp', 'cp'])
-        groups['cp'], _ = get_groups(degree_rank_dict, ignore_keys=['cp'])
-        groups['dp'], _ = get_groups(degree_rank_dict, ignore_keys=['dp'])
-        groups['tsp_cp'], _ = get_groups(degree_rank_dict, ignore_keys=['tp', 'sp', 'cp'])
-        config_to_groups[key] = groups
+        tp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tp'], group_cache=group_cache, cache_domain="tp")
+        sp_group, _ = get_groups(degree_rank_dict, ignore_keys=['sp'], group_cache=group_cache, cache_domain="sp")
+        sdp_group, _ = get_groups(degree_rank_dict, ignore_keys=['dp', 'sp', 'cp'], group_cache=group_cache, cache_domain="sdp")
+        cp_group, _ = get_groups(degree_rank_dict, ignore_keys=['cp'], group_cache=group_cache, cache_domain="cp")
+        dp_group, _ = get_groups(degree_rank_dict, ignore_keys=['dp'], group_cache=group_cache, cache_domain="dp")
+        tsp_cp_group, _ = get_groups(degree_rank_dict, ignore_keys=['tp', 'sp', 'cp'], group_cache=group_cache, cache_domain="tsp_cp")
 
-    # Populate per-layer lists by lookup.
-    for i in range(total_num):
-        key = (all_tp_sizes[i], all_sp_sizes[i], all_cp_sizes[i])
-        groups = config_to_groups[key]
-        tp_groups.append(groups['tp'])
-        sp_groups.append(groups['sp'])
-        cp_groups.append(groups['cp'])
-        dp_groups.append(groups['dp'])
-        sdp_groups.append(groups['sdp'])
-        tsp_cp_groups.append(groups['tsp_cp'])
-        
+        tp_groups.append(tp_group)
+        sp_groups.append(sp_group)
+        cp_groups.append(cp_group)
+        dp_groups.append(dp_group)
+        sdp_groups.append(sdp_group)
+        tsp_cp_groups.append(tsp_cp_group)
+
     # [Step 3] build rank to parallel coords for moe layer
     if is_moe_model:
         ep_groups:List[CommGroup] = []
@@ -315,39 +326,23 @@ def gen_comm_groups(
         tp_and_ep_groups:List[CommGroup] = []
         dp_of_ep_groups:List[CommGroup] = []
 
-        moe_unique_keys: List[tuple] = []
-        moe_seen = set()
         for i in range(total_num):
-            key = (all_ep_sizes[i], all_tp_of_ep_sizes[i])
-            if key not in moe_seen:
-                moe_seen.add(key)
-                moe_unique_keys.append(key)
-
-        moe_config_to_groups: Dict[tuple, Dict[str, CommGroup]] = {}
-        for key in moe_unique_keys:
-            ep_size, etp_size = key
-            edp_size = world_size // pp_size // ep_size // etp_size
+            edp_size = world_size // pp_size // all_ep_sizes[i] // all_tp_of_ep_sizes[i]
             name2size = {
                 'pp': pp_size,
-                'ep': ep_size,
+                'ep': all_ep_sizes[i],
                 'edp': edp_size,
-                'etp': etp_size,
+                'etp': all_tp_of_ep_sizes[i],
             }
             degree_rank_dict = build_rank_to_parallel_coords(world_size, name2size, order='pp-ep-edp-etp')
-            groups: Dict[str, CommGroup] = {}
-            groups['ep'], _ = get_groups(degree_rank_dict, ignore_keys=['ep'])
-            groups['tp_of_ep'], _ = get_groups(degree_rank_dict, ignore_keys=['etp'])
-            groups['tp_and_ep'], _ = get_groups(degree_rank_dict, ignore_keys=['ep', 'etp'])
-            groups['dp_of_ep'], _ = get_groups(degree_rank_dict, ignore_keys=['edp'])
-            moe_config_to_groups[key] = groups
-
-        for i in range(total_num):
-            key = (all_ep_sizes[i], all_tp_of_ep_sizes[i])
-            groups = moe_config_to_groups[key]
-            ep_groups.append(groups['ep'])
-            tp_of_ep_groups.append(groups['tp_of_ep'])
-            tp_and_ep_groups.append(groups['tp_and_ep'])
-            dp_of_ep_groups.append(groups['dp_of_ep'])
+            ep_group, _ = get_groups(degree_rank_dict, ignore_keys=['ep'], group_cache=group_cache, cache_domain="ep")
+            tp_of_ep_group, _ = get_groups(degree_rank_dict, ignore_keys=['etp'], group_cache=group_cache, cache_domain="tp_of_ep")
+            tp_and_ep_group, _ = get_groups(degree_rank_dict, ignore_keys=['ep', 'etp'], group_cache=group_cache, cache_domain="tp_and_ep")
+            dp_of_ep_group, _ = get_groups(degree_rank_dict, ignore_keys=['edp'], group_cache=group_cache, cache_domain="dp_of_ep")
+            ep_groups.append(ep_group)
+            tp_of_ep_groups.append(tp_of_ep_group)
+            tp_and_ep_groups.append(tp_and_ep_group)
+            dp_of_ep_groups.append(dp_of_ep_group)
     else:
         ep_groups, tp_of_ep_groups, tp_and_ep_groups, dp_of_ep_groups = None, None, None, None
 
@@ -361,7 +356,7 @@ def gen_comm_groups(
         former_cp_size = all_cp_sizes[i - 1]
         latter_tsp_size = all_sp_sizes[i] if all_sp_sizes[i] > 1 else all_tp_sizes[i]
         latter_cp_size = all_cp_sizes[i]
-        
+
         if former_tsp_size == latter_tsp_size and former_cp_size == latter_cp_size:
             split_cp_group = None
             allgather_cp_group = None
@@ -374,7 +369,11 @@ def gen_comm_groups(
             allgather_cp_group = None if latter_cp_size == 1 else cp_groups[i]
             split_tp_sp_cp_group = tsp_cp_groups[i - 1]
             allgather_tp_sp_cp_group = tsp_cp_groups[i]
-            fused_split_group, fused_allgather_group = merge_redistributed_group(split_tp_sp_cp_group, allgather_tp_sp_cp_group)
+            fused_split_group, fused_allgather_group = merge_redistributed_group(
+                split_tp_sp_cp_group,
+                allgather_tp_sp_cp_group,
+                group_cache=group_cache,
+            )
 
         allgather_cp_groups.append(allgather_cp_group)
         split_cp_groups.append(split_cp_group)
@@ -441,43 +440,3 @@ def gen_comm_groups(
         fused_split_groups,
         embedding_group,
     )
-
-
-if __name__ == "__main__":
-    # Standalone test: no real torch.distributed init.
-    # CommGroup skips new_group() because is_initialized() is False;
-    # we monkey-patch get_rank / get_world_size so the helpers that
-    # read them work for the simulated rank.
-    import torch.distributed as dist
-
-    world_size = 16
-    pp_size = 2
-    is_moe_model = False
-
-    # 4 layers, varied (tp, sp, cp) to exercise dedup + redistribution paths.
-    all_tp_sizes       = [2, 2, 1, 1]
-    all_sp_sizes       = [1, 1, 1, 1]
-    all_cp_sizes       = [1, 1, 2, 2]
-    all_ep_sizes       = [1, 1, 1, 1]
-    all_tp_of_ep_sizes = [1, 1, 1, 1]
-
-    dist.get_world_size = lambda: world_size
-
-    # Iterate over every rank to print each rank's owner groups.
-    # Set show_ranks_to_print to a subset (e.g. [0]) if output is too verbose.
-    show_ranks_to_print = list(range(world_size))
-
-    for test_rank in show_ranks_to_print:
-        dist.get_rank = lambda r=test_rank: r
-        print(f"\n########## simulated rank {test_rank} ##########")
-        gen_comm_groups(
-            all_tp_sizes,
-            all_sp_sizes,
-            all_cp_sizes,
-            all_ep_sizes,
-            all_tp_of_ep_sizes,
-            pp_size=pp_size,
-            is_moe_model=is_moe_model,
-            show_rank=test_rank,
-            manual_world_size=world_size,
-        )
